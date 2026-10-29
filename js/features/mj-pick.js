@@ -308,7 +308,81 @@
     }
 
     /**
-     * 解析「彻狸宇宙」导出的对话 HTML。
+     * 把一段文字拆成句子池。解析的两条路（导出格式 / 整篇兜底）共用同一套清洗规则。
+     * @param {string} text
+     * @returns {string[]}
+     */
+    function collectSentences(text) {
+        var out = [];
+        var parts = splitSentences(text);
+        for (var i = 0; i < parts.length; i++) {
+            var c = cleanText(parts[i]);
+            if (!c || !hasContent(c)) continue;
+            out.push(c);
+        }
+        return out;
+    }
+
+    // 整篇兜底时先摘掉的「页面零件」。留着会把「复制」「导出」这类按钮字当成他说的话。
+    var PAGE_CHROME = 'script,style,noscript,template,svg,canvas,iframe,object,embed,' +
+        'button,input,select,textarea,option,nav,header,footer,aside,form';
+
+    // 块级标签：进出各垫一个换行，保住原页面的分行，句子才不会糊成一坨
+    var BLOCK_TAG = {
+        DIV: 1, P: 1, LI: 1, UL: 1, OL: 1, TR: 1, TD: 1, TH: 1,
+        SECTION: 1, ARTICLE: 1, MAIN: 1, BLOCKQUOTE: 1, PRE: 1,
+        FIGURE: 1, FIGCAPTION: 1, TABLE: 1, HR: 1
+    };
+
+    // 标题不算他说的话：《彻给我的信》那种页面顶上挂个「吵架后」，被挑成字卡就很怪
+    var TITLE_TAG = { H1: 1, H2: 1, H3: 1, H4: 1, H5: 1, H6: 1 };
+
+    /**
+     * 递归取文字。文本节点原样收；块级元素两侧补换行；<br> 当换行；标题整段跳过。
+     * @param {Node} node
+     * @returns {string}
+     */
+    function textOfNode(node) {
+        if (!node) return '';
+        if (node.nodeType === 3) return node.nodeValue || '';
+        if (node.nodeType !== 1) return '';
+        if (node.tagName === 'BR') return '\n';
+        if (TITLE_TAG[node.tagName]) return '\n';
+
+        var s = '';
+        for (var i = 0; i < node.childNodes.length; i++) {
+            s += textOfNode(node.childNodes[i]);
+        }
+        return BLOCK_TAG[node.tagName] ? ('\n' + s + '\n') : s;
+    }
+
+    /**
+     * 整篇兜底：认不出「彻狸宇宙」那套 class 时，把页面正文整篇当成他说过的话。
+     * 《彻给我的信》这类文件本来整页就是他写的，直接整篇进池正好。
+     * @param {string} html
+     * @returns {string[]}
+     */
+    function parseWholePage(html) {
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+
+        var junk = doc.querySelectorAll(PAGE_CHROME);
+        for (var i = 0; i < junk.length; i++) {
+            if (junk[i].parentNode) junk[i].parentNode.removeChild(junk[i]);
+        }
+
+        var raw = doc.body ? textOfNode(doc.body) : '';
+        raw = raw.replace(/\r/g, '')
+                 .replace(/[ \t\u00a0\u3000]+/g, ' ')
+                 .replace(/ *\n */g, '\n')
+                 .replace(/\n{2,}/g, '\n')
+                 .trim();
+
+        return raw ? collectSentences(raw) : [];
+    }
+
+    /**
+     * 解析对话 HTML。优先按「彻狸宇宙」导出的格式读；
+     * 一个 .exp-say / .exp-action 都没认出来时，退回整篇正文（普通 HTML、单封信都能吃）。
      * 他的台词在 .exp-say，动作旁白在 .exp-action，两者平起平坐、按文档顺序进池。
      * @param {string} html
      * @returns {string[]} 句子数组
@@ -318,12 +392,8 @@
         var out = [];
 
         function push(txt) {
-            var parts = splitSentences(txt);
-            for (var i = 0; i < parts.length; i++) {
-                var c = cleanText(parts[i]);
-                if (!c || !hasContent(c)) continue;
-                out.push(c);
-            }
+            var parts = collectSentences(txt);
+            for (var i = 0; i < parts.length; i++) out.push(parts[i]);
         }
 
         var blocks = doc.querySelectorAll('.exp-assist');
@@ -343,6 +413,9 @@
                 if (t) push(t);
             });
         }
+
+        // 导出格式一句都没读到（比如普通网页存下来的信）→ 整篇正文兜底
+        if (!out.length) return parseWholePage(html);
         return out;
     }
 
@@ -1141,8 +1214,7 @@
                 S.showAll = false;
 
                 if (!sentences.length) {
-                    say('「' + file.name + '」读到了 ' + text.length + ' 个字符，但没找到他说过的话。' +
-                        '请确认是「彻狸宇宙」导出的对话 HTML。', true);
+                    say('「' + file.name + '」读到了 ' + text.length + ' 个字符，但里面没有可用的正文。', true);
                     return;
                 }
                 S.stage = 'preview';
