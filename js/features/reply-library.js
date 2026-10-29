@@ -31,6 +31,10 @@ let _batchModeTarget = 'custom'; // 'custom' or 'stickers' (depends on currentSu
 let _searchVisible = false;
 let _searchQuery = '';
 let _searchDebounceTimer = null;
+// 「他挑的」筛选：null | 'picked'（✍️ 让他挑选的）| 'written'（📖 我写他挑的）
+let _mjpFilter = null;
+// 本次渲染用的登记表。整表重画时刷新一次，卡片直接用，不再每张卡都去取一遍。
+let _mjpRegNow = null;
 let _activeGroupFilter = null; 
 
 const GROUP_COLORS = [
@@ -126,9 +130,50 @@ const ICONS = {
     (document.head || document.documentElement).appendChild(s);
 })();
 
+/* ── 「他挑的」来源标识 ────────────────────────────────────────
+ * 数据在 js/features/mj-pick.js，通过 window.__mjpRegistry() 拿。
+ * 取一次、整表重画时刷新一次；卡片直接用，不再每张卡都去取一遍。
+ */
+
+/** 刷新本次渲染用的登记表（在整表重画的开头调） */
+function _mjpRefresh() {
+    try {
+        _mjpRegNow = (typeof window.__mjpRegistry === 'function') ? window.__mjpRegistry() : null;
+    } catch (e) {
+        _mjpRegNow = null;
+    }
+}
+
+/**
+ * 这张卡的来源。
+ * @param {string} item
+ * @returns {string|null} 'pick'（✍️）| 'written'（📖）| null
+ */
+function _mjpSrcOf(item) {
+    if (!_mjpRegNow) return null;
+    try {
+        return _mjpRegNow.srcOf(item);
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * 当前筛选要不要这张卡。没开筛选就全要。
+ * @param {string} item
+ * @returns {boolean}
+ */
+function _mjpMatch(item) {
+    if (!_mjpFilter) return true;
+    const want = (_mjpFilter === 'picked') ? 'pick' : 'written';
+    return _mjpSrcOf(item) === want;
+}
+
 function _renderListContentOnly() {
     const list = document.getElementById('custom-replies-list');
     if (!list) return;
+
+    _mjpRefresh();
 
     const toolbar = document.getElementById('batch-ops-toolbar');
     Array.from(list.children).forEach(child => {
@@ -167,6 +212,11 @@ function _renderListContentOnly() {
     if (renderType === 'emoji') { _renderEmojiTab(list, itemsToRender); return; }
     if (renderType === 'image') { _renderStickerTab(list, itemsToRender); return; }
 
+    // 「他挑的」筛选（✍️ / 📖 气泡）
+    if (_mjpFilter && currentMajorTab === 'reply' && currentSubTab === 'custom') {
+        itemsToRender = itemsToRender.filter(_mjpMatch);
+    }
+
     const q = _searchQuery.toLowerCase().trim();
     const filtered = q ? itemsToRender.filter(item => item.toLowerCase().includes(q)) : itemsToRender;
 
@@ -200,6 +250,8 @@ function renderReplyLibrary() {
     const titleEl = document.getElementById('cr-modal-title');
     if (!list) return;
 
+    _mjpRefresh();
+
     const currentConfig = LIBRARY_CONFIG[currentMajorTab];
     if (titleEl) titleEl.textContent = currentConfig.title;
 
@@ -211,7 +263,7 @@ function renderReplyLibrary() {
                 ${tab.name}
             </button>
         `).join('');
-        subTabsContainer.querySelectorAll('.reply-tab-btn').forEach(btn => {
+        subTabsContainer.querySelectorAll('.reply-tab-btn[data-id]').forEach(btn => {
             btn.addEventListener('click', () => {
                 currentSubTab = btn.dataset.id;
                 _batchModeActive = false;
@@ -264,11 +316,19 @@ function renderReplyLibrary() {
     if (renderType === 'emoji') { _renderEmojiTab(list, itemsToRender); return; }
     if (renderType === 'image') { _renderStickerTab(list, itemsToRender); return; }
 
+    // 「他挑的」筛选（✍️ / 📖 气泡）
+    if (_mjpFilter && currentMajorTab === 'reply' && currentSubTab === 'custom') {
+        itemsToRender = itemsToRender.filter(_mjpMatch);
+    }
+
     const q = _searchQuery.toLowerCase().trim();
     let filtered = q ? itemsToRender.filter(item => item.toLowerCase().includes(q)) : itemsToRender;
 
     if (filtered.length === 0) {
-        list.innerHTML = renderEmptyState(q ? `未找到"${q}"` : '列表空空如也');
+        const emptyText = q ? `未找到"${q}"`
+            : (_mjpFilter === 'picked' ? '还没有他挑选的字卡'
+             : _mjpFilter === 'written' ? '还没有「我写他挑」的字卡' : '列表空空如也');
+        list.innerHTML = renderEmptyState(emptyText);
         return;
     }
 
@@ -311,7 +371,9 @@ function _renderModernToolbar() {
     })();
 
     let groupFilterHtml = '';
-    if (hasGroupSupport && ctx.groups && ctx.groups.length > 0) {
+    // 字卡文件夹的筛选行（全部 / 未分组 / 各分组），不掺「查看」的事
+    const showFilterRow = hasGroupSupport && ctx.groups && ctx.groups.length > 0;
+    if (showFilterRow) {
         const allCount = ctx.items.length;
         const ungroupedCount = ctx.items.filter(item =>
             !ctx.groups.some(g => g.items && g.items.includes(item))
@@ -409,9 +471,11 @@ function _renderModernToolbar() {
             .batch-act-danger { border-color:rgba(239,68,68,.3);color:#ef4444; }
             .batch-act-danger:hover { background:rgba(239,68,68,.08); }
             .batch-act-disabled { opacity:0.4;pointer-events:none; }
+            .search-block {
+                border-bottom:1px solid var(--border-color);animation:slideDown 0.18s ease;
+            }
             .search-input-line {
                 display:flex;align-items:center;gap:8px;padding:8px 15px;
-                border-bottom:1px solid var(--border-color);animation:slideDown 0.18s ease;
             }
             @keyframes slideDown { from{opacity:0;transform:translateY(-6px)} to{opacity:1;transform:none} }
             .search-input-line input {
@@ -420,6 +484,17 @@ function _renderModernToolbar() {
                 font-size:13px;font-family:var(--font-family);outline:none;transition:border 0.18s;
             }
             .search-input-line input:focus { border-color:var(--accent-color); }
+            .search-view-line {
+                display:flex;align-items:center;gap:8px;padding:0 15px 9px;
+            }
+            .view-chip {
+                padding:6px 9px;border-radius:16px;border:1px solid var(--border-color);
+                background:var(--primary-bg);color:var(--text-primary);
+                font-size:14px;line-height:1;cursor:pointer;font-family:var(--font-family);transition:all 0.18s;flex-shrink:0;
+            }
+            .view-chip.active {
+                background:var(--accent-color);border-color:var(--accent-color);color:#fff;
+            }
             .group-filter-pills::-webkit-scrollbar { display:none; }
         </style>
 
@@ -448,12 +523,19 @@ function _renderModernToolbar() {
         </div>
 
         ${_searchVisible ? `
-        <div class="search-input-line">
-            <div style="color:var(--text-secondary);">${ICONS.search}</div>
-            <input type="text" id="rl-search-input" value="${_searchQuery}" placeholder="搜索内容…" autocomplete="off">
-            <button class="toolbar-icon-btn" id="tb-search-clear" title="清除" style="width:28px;height:28px;">
-                ${ICONS.close}
-            </button>
+        <div class="search-block">
+            <div class="search-input-line">
+                <div style="color:var(--text-secondary);">${ICONS.search}</div>
+                <input type="text" id="rl-search-input" value="${_searchQuery}" placeholder="搜索内容…" autocomplete="off">
+                <button class="toolbar-icon-btn" id="tb-search-clear" title="清除" style="width:28px;height:28px;">
+                    ${ICONS.close}
+                </button>
+            </div>
+            ${isMainCustom ? `
+            <div class="search-view-line">
+                <button class="view-chip ${_mjpFilter === 'picked' ? 'active' : ''}" data-mjp="picked" title="只看他挑选的字卡">✍️</button>
+                <button class="view-chip ${_mjpFilter === 'written' ? 'active' : ''}" data-mjp="written" title="只看我写他挑的字卡">📖</button>
+            </div>` : ''}
         </div>` : ''}
 
         ${groupFilterHtml}
@@ -463,7 +545,7 @@ function _renderModernToolbar() {
 
     toolbar.querySelector('#tb-search-btn').onclick = () => {
         _searchVisible = !_searchVisible;
-        if (!_searchVisible) _searchQuery = '';
+        if (!_searchVisible) { _searchQuery = ''; _mjpFilter = null; }
         renderReplyLibrary();
         if (_searchVisible) setTimeout(() => document.getElementById('rl-search-input')?.focus(), 50);
     };
@@ -487,11 +569,12 @@ function _renderModernToolbar() {
                     clearTimeout(_searchDebounceTimer);
                     _searchVisible = false;
                     _searchQuery = '';
+                    _mjpFilter = null;
                     renderReplyLibrary();
                 }
             };
         }
-        toolbar.querySelector('#tb-search-clear').onclick = () => { _searchVisible = false; _searchQuery = ''; renderReplyLibrary(); };
+        toolbar.querySelector('#tb-search-clear').onclick = () => { _searchVisible = false; _searchQuery = ''; _mjpFilter = null; renderReplyLibrary(); };
     }
 
     if (hasGroupSupport) toolbar.querySelector('#tb-groups-btn')?.addEventListener('click', _showGroupManager);
@@ -510,10 +593,18 @@ function _renderModernToolbar() {
     toolbar.querySelector('#tb-import-btn')?.addEventListener('click', () => document.getElementById('import-replies-input')?.click());
     toolbar.querySelector('#tb-export-btn')?.addEventListener('click', _showExportUI);
 
-    toolbar.querySelectorAll('.gfp-btn').forEach(btn => {
+    toolbar.querySelectorAll('.gfp-btn[data-filter]').forEach(btn => {
         btn.addEventListener('click', () => {
             const f = btn.dataset.filter;
             _activeGroupFilter = f === 'all' ? null : (f === 'ungrouped' ? 'ungrouped' : parseInt(f));
+            renderReplyLibrary();
+        });
+    });
+
+    // ✍️/📖 查看气泡（在搜索展开区里，是搜索的子功能）
+    toolbar.querySelectorAll('[data-mjp]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            _mjpFilter = (_mjpFilter === btn.dataset.mjp) ? null : btn.dataset.mjp;
             renderReplyLibrary();
         });
     });
@@ -757,6 +848,13 @@ function _createCard(item, index, disabledSet) {
     const isDisabled = disabledSet && disabledSet.has(item);
     const isSelected = _batchSelectedIndices.has(index);
 
+    // 「他挑的」来源标识：✍️ 让他挑选的 / 📖 我写他挑的
+    // 登记表在整表重画时已经取过一次，这里直接用，不用每张卡都去问一遍
+    const mjpSrc = _mjpSrcOf(item);
+    const mjpBadge = mjpSrc
+        ? `<span title="${mjpSrc === 'pick' ? '他挑选的字卡' : '我写他挑的字卡'}" style="margin-right:5px;font-size:11px;flex-shrink:0;">${mjpSrc === 'pick' ? '✍️' : '📖'}</span>`
+        : '';
+
     const groupBadge = (() => {
         const groups = _getGroupCtx().groups;
         if (!groups) return '';
@@ -789,7 +887,7 @@ function _createCard(item, index, disabledSet) {
                 ${isSelected ? `<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5L8 3" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg>` : ''}
             </div>
             <div style="flex:1;min-width:0;${isDisabled ? 'opacity:0.4;' : ''}">
-                ${displayText}
+                <div style="display:flex;align-items:flex-start;gap:0;">${mjpBadge}${displayText}</div>
                 ${groupBadge}
             </div>
         `;
@@ -803,22 +901,25 @@ function _createCard(item, index, disabledSet) {
 
     div.innerHTML = `
         <div style="flex:1;min-width:0;${isDisabled ? 'opacity:0.4;text-decoration:line-through;' : ''}">
-            ${displayText}
+            <div style="display:flex;align-items:flex-start;gap:0;">${displayText}</div>
             ${groupBadge}
         </div>
-        <div class="rl-card-actions">
-            <button class="rl-act-btn ${isDisabled ? 'active' : ''}" data-action="disable" title="${isDisabled ? '启用' : '屏蔽'}">
-                ${isDisabled ? ICONS.eye : ICONS.eyeOff}
-            </button>
-            <button class="rl-act-btn" data-action="tag" title="分组">
-                ${ICONS.tag}
-            </button>
-            <button class="rl-act-btn" data-action="edit" title="编辑">
-                ${ICONS.edit}
-            </button>
-            <button class="rl-act-btn danger" data-action="delete" title="删除">
-                ${ICONS.trash}
-            </button>
+        <div style="margin-left:auto;flex-shrink:0;padding-left:8px;display:flex;align-items:center;">
+            ${mjpSrc ? `<span class="rl-mjp-flag" title="${mjpSrc === 'pick' ? '他挑选的字卡' : '我写他挑的字卡'}" style="font-size:13px;flex-shrink:0;margin-right:2px;cursor:default;">${mjpSrc === 'pick' ? '✍️' : '📖'}</span>` : ''}
+            <div class="rl-card-actions" style="margin-left:0;">
+                <button class="rl-act-btn ${isDisabled ? 'active' : ''}" data-action="disable" title="${isDisabled ? '启用' : '屏蔽'}">
+                    ${isDisabled ? ICONS.eye : ICONS.eyeOff}
+                </button>
+                <button class="rl-act-btn" data-action="tag" title="分组">
+                    ${ICONS.tag}
+                </button>
+                <button class="rl-act-btn" data-action="edit" title="编辑">
+                    ${ICONS.edit}
+                </button>
+                <button class="rl-act-btn danger" data-action="delete" title="删除">
+                    ${ICONS.trash}
+                </button>
+            </div>
         </div>
     `;
 
@@ -2300,6 +2401,7 @@ function initReplyLibraryListeners() {
             _searchVisible = false;
             _searchQuery = '';
             _activeGroupFilter = null;
+            _mjpFilter = null;
             currentSubTab = LIBRARY_CONFIG[currentMajorTab].tabs[0].id;
             renderReplyLibrary();
         });
