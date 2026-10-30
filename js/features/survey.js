@@ -1983,13 +1983,20 @@
     }
 
     // 问卷入口 → 高级功能卡片 → 设置icon，三层小红点跟着同一个未读数亮灭
+    // 第二、三层与「和他一起选字卡」共用，那边有未看时也要亮（它自己会刷新，这里兜住互相覆盖）
     function _updateEntryBadges() {
         var has = _getUnreadCount() > 0;
+        try {
+            if (window.MjPickBadge && typeof window.MjPickBadge.on === 'function' && window.MjPickBadge.on()) has = true;
+        } catch (e) { }
         ['survey-entry-badge', 'advanced-entry-badge', 'settings-entry-badge'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.style.display = has ? 'inline-block' : 'none';
         });
     }
+
+    // 给选字卡那边看：它刷新红点时也要把问卷的未读数算进去
+    window.SurveyBadge = { on: function () { return _getUnreadCount() > 0; } };
 
     // ── 调试用（console 里跑，不会自动执行）──────────────────────
     window._surveyDebugList = function () { console.log(JSON.parse(JSON.stringify(_data.askPartner))); return _data.askPartner; };

@@ -601,6 +601,10 @@
             + '#emg-menu .emg-mi-dot{width:9px;height:9px;border-radius:50%;flex:none;}'
             + '#emg-menu .emg-mi-start .emg-mi-dot{background:#94b087;}'
             + '#emg-menu .emg-mi-end .emg-mi-dot{background:#cf2f1f;}'
+            + '#emg-menu button.is-cur{cursor:default;}'
+            + '#emg-menu .emg-mi-cur{margin-left:auto;padding-left:10px;'
+            + 'font-size:11px;line-height:1;align-self:center;color:#c2b9aa;display:none;}'
+            + '#emg-menu button.is-cur .emg-mi-cur{display:block;}'
             + '#emg-recover-card{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);'
             + 'z-index:12500;width:320px;max-width:calc(100vw - 40px);max-height:80vh;overflow-y:auto;'
             + 'background:#fffdf9;border:1px solid #e8e2d6;border-radius:16px;'
@@ -654,33 +658,37 @@
         if (btn) {
             btn.classList.toggle('is-on', S.on);
             btn.title = S.on
-                ? '应急中：点开面板可结束'
-                : '应急面板：点开可开启';
+                ? '离线中：点开面板可切回在线'
+                : '在线：点开面板可切到离线';
         }
         try { document.body.classList.toggle('emg-on', S.on); } catch (e) {}
         paintMenu();
     }
 
-    /* ── 小面板：开启 / 结束 两个独立按钮 ── */
+    /* ── 小面板：在线 / 离线 ── */
 
     function mountMenu() {
         if (document.getElementById('emg-menu')) return;
         var menu = document.createElement('div');
         menu.id = 'emg-menu';
-        menu.innerHTML = '<div class="emg-menu-title">应急状态 · 不在线</div>'
-            + '<button type="button" class="emg-mi-start" data-act="start">'
-            + '<span class="emg-mi-dot"></span>开启不在线</button>'
-            + '<button type="button" class="emg-mi-end" data-act="end">'
-            + '<span class="emg-mi-dot"></span>结束不在线</button>';
+        menu.innerHTML = '<div class="emg-menu-title">应急开关</div>'
+            + '<button type="button" class="emg-mi-start" data-act="online">'
+            + '<span class="emg-mi-dot"></span>在线'
+            + '<span class="emg-mi-cur">当前</span></button>'
+            + '<button type="button" class="emg-mi-end" data-act="offline">'
+            + '<span class="emg-mi-dot"></span>离线'
+            + '<span class="emg-mi-cur">当前</span></button>';
         menu.addEventListener('click', function (ev) {
             var b = ev.target.closest('button[data-act]');
-            if (!b || b.disabled) return;
+            if (!b) return;
             closeMenu();
-            if (b.dataset.act === 'start') {
+            if (b.dataset.act === 'online') {
+                if (!S.on) return;         // 已经在线，点了不出声
+                recover('manual');
+            } else {
+                if (S.on) return;          // 已经离线
                 trip('manual');
                 showNotification('已进入应急：通用字卡之外全部静默', 'info', 2600);
-            } else {
-                recover('manual');
             }
         });
         document.body.appendChild(menu);
@@ -692,8 +700,15 @@
         if (!menu) return;
         var bStart = menu.querySelector('.emg-mi-start');
         var bEnd = menu.querySelector('.emg-mi-end');
-        if (bStart) bStart.disabled = S.on;
-        if (bEnd) bEnd.disabled = !S.on;
+        // 两边都点得动（甲方案）：点哪个就是哪个状态，当前那项只是标个「当前」
+        if (bStart) {
+            bStart.disabled = false;
+            bStart.classList.toggle('is-cur', !S.on);
+        }
+        if (bEnd) {
+            bEnd.disabled = false;
+            bEnd.classList.toggle('is-cur', S.on);
+        }
     }
 
     function openMenu() {

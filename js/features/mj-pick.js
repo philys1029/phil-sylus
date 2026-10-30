@@ -2040,10 +2040,40 @@
         if (p) p.remove();
     }
 
-    function updateEntryBadge() {
-        var el = document.getElementById('mj-pick-entry-badge');
-        if (el) el.style.display = (S.badgeOn && S.stage === 'list') ? 'inline-block' : 'none';
+    /**
+     * 三层小红点：选字卡入口 → 高级功能卡片 → 顶栏设置。
+     *
+     * 后面两层和「问卷」共用同一批元素（#advanced-entry-badge / #settings-entry-badge），
+     * 谁有未读都该亮，所以两边各暴露一个 on() 给对方，任一为真就点亮。
+     * 只亮不看来源：你点进去看完，谁没看完另一个还亮着。
+     */
+    function badgeOnNow() {
+        return !!(S.badgeOn && S.stage === 'list');
     }
+
+    function surveyUnread() {
+        try {
+            return !!(window.SurveyBadge && window.SurveyBadge.on && window.SurveyBadge.on());
+        } catch (e) { return false; }
+    }
+
+    function updateEntryBadge() {
+        var on = badgeOnNow();
+
+        // 第一层：选字卡入口自己
+        var el = document.getElementById('mj-pick-entry-badge');
+        if (el) el.style.display = on ? 'inline-block' : 'none';
+
+        // 第二、三层：高级功能 + 设置（与问卷共用，或逻辑）
+        var outer = on || surveyUnread();
+        ['advanced-entry-badge', 'settings-entry-badge'].forEach(function (id) {
+            var e = document.getElementById(id);
+            if (e) e.style.display = outer ? 'inline-block' : 'none';
+        });
+    }
+
+    // 给问卷那边看：它刷新红点时也要把选字卡的状态算进去
+    window.MjPickBadge = { on: badgeOnNow };
 
     /* ══════════════════════ 12 登记表接口 ══════════════════════
      * 回复库渲染卡片和筛选时调用，拿每张卡的来源：
@@ -2236,6 +2266,7 @@
         roll: roll,
         thinkWindow: thinkWindow,
         pickCards: pickCards,
-        will: WILL
+        will: WILL,
+        badge: updateEntryBadge
     };
 })();
