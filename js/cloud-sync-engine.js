@@ -54,6 +54,8 @@
         'customReplies', 'customPokes', 'customStatuses', 'customMottos',
         'customIntros', 'customEmojis', 'customPeriodCare',
         'customReplyGroups', 'customPokeGroups', 'customStatusGroups',
+        // 和他一起选字卡（挑选历史 / 「他挑的」登记表）
+        'mjPickHistory', 'mjPickedCards',
         // 经期记录（日历标记、每日打卡、梦角留言状态）
         'periodData',
         // 调查问卷（我问梦角/梦角问我，图片选项是 oss:// 引用或未配置OSS时的本地 base64，体积小）
@@ -770,6 +772,8 @@
     // ==== 触发（防抖） ====
     function _scheduleSync(reason, immediate) {
         if (!window.CloudSync || !window.CloudSync.isConnected()) return;
+        // 应急态：整条同步链路冻结，不读不写（见 features/emergency.js）
+        if (window.__emergencyFreeze) return;
         // 未就绪时不同步：避免 app 启动加载数据时被误触发
         if (!_state.ready && reason === 'change') return;
         // 恢复进行中：完全暂停同步（避免半状态被上传覆盖云端好数据）

@@ -2319,6 +2319,10 @@ const addMessage = (message) => {
 
         function sendMessage(textOverride = null, type = 'normal') {
             const text = textOverride || DOMElements.messageInput.value.trim();
+            // 应急态下：喊他的名字有机会把他叫回来（见 features/emergency.js）
+            if (text && window.EmergencyOffline && typeof window.EmergencyOffline._watchCall === 'function') {
+                window.EmergencyOffline._watchCall(text);
+            }
             const imageFile = DOMElements.imageInput.files[0];
             if (!text && !imageFile && type === 'normal') return;
 
@@ -2668,10 +2672,18 @@ if (partnerPersonas && partnerPersonas.length > 0 && Math.random() < 0.3) {
             (window.customReplyGroups || []).forEach(g => {
                 if (g.disabled && Array.isArray(g.items)) g.items.forEach(item => disabledGroupItemsOnce.add(item));
             });
-            const replyPoolOnce = customReplies
+            let replyPoolOnce = customReplies
                 .filter(r => !disabledItemsOnce.has(r) && !disabledGroupItemsOnce.has(r))
                 .map(r => String(r || '').trim())
                 .filter(Boolean);
+            // 应急白名单：熔断时只留「通用字卡」组里的条目。
+            // 必须按「组里点名」正向筛——只靠上面的「屏蔽组反排」挡不住没归组的散卡。
+            if (window.EmergencyOffline && typeof window.EmergencyOffline.filterPool === 'function') {
+                const _before = replyPoolOnce.length;
+                replyPoolOnce = window.EmergencyOffline.filterPool(replyPoolOnce);
+                // 熔断中池子被清空：安静，不弹「回复库为空」打扰她
+                if (_before > 0 && replyPoolOnce.length === 0) return;
+            }
             if (!replyPoolOnce.length) {
                 showNotification('回复库可用内容为空（可能被分组禁用或屏蔽），请到「自定义回复」中调整', 'info', 4000);
                 return;
@@ -2679,6 +2691,10 @@ if (partnerPersonas && partnerPersonas.length > 0 && Math.random() < 0.3) {
 
             // 确认有可用回复后再展示“正在输入中”，避免空转
             showTypingIndicator();
+            // 应急：他这次开口之后，极低概率让信号灯自己亮一次（1.25%，见 emergency.js）
+            if (window.EmergencyOffline && typeof window.EmergencyOffline._maybeTrip === 'function') {
+                setTimeout(function () { window.EmergencyOffline._maybeTrip(); }, 1500);
+            }
             let delay = 0;
             // 陪伴页静默触发时不引用用户消息（陪伴中的触发不是用户发了某条具体消息）
             const recentUserMsgs = (settings.replyEnabled && !window._companionSilentTrigger)
@@ -2711,8 +2727,13 @@ if (partnerPersonas && partnerPersonas.length > 0 && Math.random() < 0.3) {
                 delay += settings.replyDelayMin + Math.random() * delayRange;
                 setTimeout(() => {
                     try {
-                    const replyPool = replyPoolOnce;
-                    // 被屏蔽或无效项直接换下一个，尽量保证每次都产出可用回复
+                    // 应急：池子是「发消息那一刻」组好的，熔断可能发生在排队期间。
+                    // 所以真正开口前再按当前状态重筛一次——熔断中只留通用字卡，滤空就这条不发。
+                    const replyPool = (window.EmergencyOffline && window.EmergencyOffline.isOn()
+                        && typeof window.EmergencyOffline.filterPool === 'function')
+                        ? window.EmergencyOffline.filterPool(replyPoolOnce)
+                        : replyPoolOnce;
+                    if (!replyPool.length) return;
                     let replyText = '';
                     if (settings.combineReplyCards) {
                         // 拼接字卡：1 ~ combineReplyMaxCards 句随机拼接，句子间随机加标点断句
@@ -2766,7 +2787,7 @@ if (partnerPersonas && partnerPersonas.length > 0 && Math.random() < 0.3) {
                         status: 'received',
                         favorited: false,
                         note: null,
-                        replyTo: (i === 0 && recentUserMsgs.length > 0 && Math.random() < 0.3)
+                        replyTo: (i === 0 && settings.replyEnabled && recentUserMsgs.length > 0 && Math.random() < 0.3)
                             ? (function(){ const m = recentUserMsgs[Math.floor(Math.random() * recentUserMsgs.length)]; return { id: m.id, text: m.text, sender: m.sender }; })()
                             : null,
                         type: 'normal'
@@ -2779,6 +2800,7 @@ if (partnerPersonas && partnerPersonas.length > 0 && Math.random() < 0.3) {
                     if (shouldSendSticker) {
                         const randomSticker = enabledStickerPool[Math.floor(Math.random() * enabledStickerPool.length)];
                         setTimeout(() => {
+                            if (window.EmergencyOffline && window.EmergencyOffline.isOn()) return;
                             addMessage({
                                 id: Date.now() + i + 2000,
                                 sender: settings.partnerName || '对方',
@@ -2800,6 +2822,7 @@ if (partnerPersonas && partnerPersonas.length > 0 && Math.random() < 0.3) {
 
                     if (separateEmoji) {
                         setTimeout(() => {
+                            if (window.EmergencyOffline && window.EmergencyOffline.isOn()) return;
                             addMessage({
                                 id: Date.now() + i + 1000,
                                 sender: settings.partnerName || '对方',

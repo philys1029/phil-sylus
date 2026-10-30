@@ -201,10 +201,15 @@
                 }
             });
 
-            const pool = replies
+            let pool = replies
                 .filter(r => !disabledItems.has(r) && !disabledGroupItems.has(r))
                 .map(r => String(r || '').trim())
                 .filter(Boolean);
+
+            // 应急白名单：熔断时只留「通用字卡」组里的条目（散卡也挡在外面）
+            if (window.EmergencyOffline && typeof window.EmergencyOffline.filterPool === 'function') {
+                pool = window.EmergencyOffline.filterPool(pool);
+            }
 
             if (pool.length === 0) return '';
 

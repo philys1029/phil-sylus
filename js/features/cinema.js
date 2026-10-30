@@ -913,10 +913,15 @@
                 g.items.forEach(function (it) { disabledGroupItems.add(it); });
             }
         });
-        return replies
+        var pool = replies
             .filter(function (r) { return !disabledItems.has(r) && !disabledGroupItems.has(r); })
             .map(function (r) { return String(r || '').trim(); })
             .filter(Boolean);
+        // 应急白名单：熔断时只留「通用字卡」组里的条目（散卡也挡在外面）
+        if (window.EmergencyOffline && typeof window.EmergencyOffline.filterPool === 'function') {
+            pool = window.EmergencyOffline.filterPool(pool);
+        }
+        return pool;
     }
 
     // ── 复用主聊天的"正在输入"和自动回复逻辑（跟陪伴模式是同一个思路）──────
