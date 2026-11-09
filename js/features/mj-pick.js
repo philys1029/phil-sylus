@@ -1694,6 +1694,12 @@
         closeImagePreview();
 
         var mobile = isMobileUA();
+        // 分享用 blob 在预览打开那一刻就开始生成。
+        // iOS 的 navigator.share 必须在用户手势里「同步」调用，先 toBlob 再 share 会丢手势静默失败；
+        // 提前备好 blob，点击时同步 share，就没这个问题。
+        var shareBlob = null;
+        try { canvas.toBlob(function (b) { shareBlob = b; }, 'image/png'); } catch (e) { }
+
         var wrap = document.createElement('div');
         wrap.style.cssText = 'position:fixed;inset:0;z-index:10003;background:rgba(0,0,0,.72);' +
             'display:flex;align-items:center;justify-content:center;padding:16px;';
@@ -1730,9 +1736,39 @@
         foot.style.cssText = 'padding:12px 16px calc(12px + env(safe-area-inset-bottom, 0px));';
 
         if (mobile) {
+            // 「保存到相册」走系统分享面板（Web Share Level 2），比长按稳得多；
+            // 长按那条老路保留作备用，分享不支持的环境自动退回下载。
+            if (navigator.share || navigator.canShare) {
+                var save = document.createElement('button');
+                save.textContent = '保存到相册';
+                save.style.cssText = 'display:block;width:100%;box-sizing:border-box;margin-bottom:10px;' +
+                    'padding:12px 0;border-radius:12px;border:none;' +
+                    'background:var(--accent-color);color:#fff;font-size:14px;font-weight:700;' +
+                    'cursor:pointer;font-family:var(--font-family);';
+                save.onclick = function () {
+                    function go(blob) {
+                        if (!blob) {
+                            notify('图片还没准备好，再点一次', 'warning');
+                            return;
+                        }
+                        var file = null;
+                        try { file = new File([blob], name, { type: 'image/png' }); } catch (e) { }
+                        if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+                            // 用户在分享面板点了取消会 reject（AbortError），那不是错，静默即可
+                            navigator.share({ files: [file] }).then(function () { }, function () { });
+                        } else {
+                            window.MJPickImage.download(canvas, name);
+                            notify('这个环境不支持分享面板，改成下载了', 'info');
+                        }
+                    }
+                    if (shareBlob) go(shareBlob);
+                    else canvas.toBlob(go, 'image/png');
+                };
+                foot.appendChild(save);
+            }
             var tip = document.createElement('div');
             tip.style.cssText = 'text-align:center;font-size:12px;line-height:1.6;color:var(--text-secondary);';
-            tip.textContent = '长按上面的图片，选「存储到照片」';
+            tip.textContent = '也可以长按上面的图片，选「存储到照片」';
             foot.appendChild(tip);
         } else {
             var row = document.createElement('div');

@@ -307,15 +307,25 @@
   // 用户扔梦角 → 梦角头像右边（side='right'）；梦角扔用户 → 用户头像左边（side='left'）；
   // 水桶的泼水效果保持原样，仍然对准头像中心
   function aimPoint(elm, itemId, side) {
-    const c = centerOf(elm);
+    // elm 传元素或直接传 {x,y,w,h} 中心点都行（兜底落点没有元素可量）
+    const c = elm && elm.getBoundingClientRect ? centerOf(elm) : elm;
     if (itemId === 'bucket') return c;
     // 落在头像左侧（头像左边缘再往左 20px），高度在头像中部，稍有上下随机
-    const dx = c.w * 0.5 + 20;
-    return { x: side === 'right' ? c.x + dx : c.x - dx, y: c.y + (Math.random() - 0.5) * c.h * 0.3 };
+    const dx = (c.w || 60) * 0.5 + 20;
+    return { x: side === 'right' ? c.x + dx : c.x - dx, y: c.y + (Math.random() - 0.5) * (c.h || 60) * 0.3 };
   }
   function centerOf(elm) {
     const r = elm.getBoundingClientRect();
     return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, h: r.height };
+  }
+  // 兜底落点：量不到头像时用聊天区中上部（视觉上还是"朝他扔"），不再整个放弃
+  function fallbackTarget() {
+    const cc = document.getElementById('chat-container');
+    if (cc) {
+      const r = cc.getBoundingClientRect();
+      if (r.width > 0) return { x: r.left + r.width * 0.3, y: r.top + Math.min(r.height * 0.45, 320) };
+    }
+    return { x: window.innerWidth * 0.35, y: window.innerHeight * 0.38 };
   }
 
   // 同一个角色会同时出现在面板图标和飞行动画里，SVG 里渐变的 id 必须唯一，
@@ -448,11 +458,14 @@
   // ---------- 用户扔 ----------
   function userThrow(itemId, fromEl) {
     const item = ITEMS.find(function (i) { return i.id === itemId; });
+    if (!item) return;
     const avatar = nearestChatAvatar('received', 'partner-avatar');
-    if (!item || !avatar) return;
+    const usable = avatar && avatar.getBoundingClientRect().width > 0;
     const from = fromEl ? centerOf(fromEl) : { x: window.innerWidth - 60, y: window.innerHeight - 120 };
-    playSequence(item.id, from, aimPoint(avatar, item.id, 'right'), function () {
-      shake(avatar);
+    // 兜底：头像量不到也照扔，落点退到聊天区中上部
+    const to = usable ? aimPoint(avatar, item.id, 'right') : aimPoint(fallbackTarget(), item.id, 'right');
+    playSequence(item.id, from, to, function () {
+      if (usable) shake(avatar);
       recordThrow('user', item);
       markReplyPending();
     });
@@ -466,17 +479,27 @@
       if (w) w.style.display = 'none';
     } catch (e) {}
   }
+  // 聊天区是不是真的看不见：后台标签页、陪伴页、电影院沉浸、情侣空间整页开着。
+  // 注意和 _isAwayFromChat() 的区别：那个把「开着弹窗」也算 away——但弹窗底下聊天看得见，
+  // 之前动画被静默跳过、时有时无，就是它在随机命中。
+  function chatTrulyHidden() {
+    if (document.hidden) return true;
+    var companionPage = document.getElementById('companion-page');
+    if (companionPage && companionPage.classList.contains('active')) return true;
+    var csPage = document.getElementById('couple-space-page');
+    if (csPage && (csPage.classList.contains('cinema-theater-mode') || csPage.classList.contains('cs-open'))) return true;
+    return false;
+  }
+
   function partnerThrow(itemId) {
     const item = ITEMS.find(function (i) { return i.id === itemId; }) || ITEMS[Math.floor(Math.random() * ITEMS.length)];
     hideTypingIndicator();
     const fromEl = nearestChatAvatar('received', 'partner-avatar');
     const toEl = nearestChatAvatar('sent', 'my-avatar');
-    const done = function () { shake(toEl); recordThrow('partner', item); };
-    // 用户不在主聊天页（后台/锁屏、弹窗、情侣空间、陪伴页……）：不播动画，直接记一条记录并提示——
-    // 动画是飞到聊天头像上的，不在聊天页看不到；后台标签页的动画帧还会被浏览器暂停，
-    // done 回调要等回到页面才触发，记录和通知都会被拖住
-    const away = (typeof window._isAwayFromChat === 'function') ? window._isAwayFromChat() : document.hidden;
-    if (away) {
+    const done = function () { if (toEl) shake(toEl); recordThrow('partner', item); };
+    // 只在聊天区真看不见（后台/陪伴页/沉浸/情侣空间整页）才不播——
+    // 记录照记、通知照发；开着弹窗这种情况聊天看得见，照播不误
+    if (chatTrulyHidden()) {
       recordThrow('partner', item);
       const lastMsg = getMessages()[getMessages().length - 1];
       const tip = item.id === 'bucket' ? '向你泼了水' : '向你扔了一个' + item.name;
@@ -485,8 +508,12 @@
       }
       return;
     }
-    if (!fromEl || !toEl || toEl.getBoundingClientRect().width === 0) { done(); return; }
-    playSequence(item.id, centerOf(fromEl), aimPoint(toEl, item.id, 'left'), done);
+    // 兜底：头像量不到（空聊天、全被隐藏）也照播，落点退到聊天区中上部，不再静默放弃
+    const fromOk = fromEl && fromEl.getBoundingClientRect().width > 0;
+    const toOk = toEl && toEl.getBoundingClientRect().width > 0;
+    const from = fromOk ? centerOf(fromEl) : { x: window.innerWidth * 0.8, y: -40 };
+    const to = toOk ? aimPoint(toEl, item.id, 'left') : aimPoint(fallbackTarget(), item.id, 'left');
+    playSequence(item.id, from, to, done);
   }
 
   // ---------- 右下角道具面板 ----------

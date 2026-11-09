@@ -11,7 +11,8 @@
  *
  * 触发：
  *   · 手动点 🚥：100% 生效（她按就是要断）
- *   · 自动：他每回复一次，掷 1.25%（与 core.js「连发 3 条消息」同源）
+ *   · （2026-11-09 雨霏：删掉「他每回复一次掷 1.25% 自动熔断」——离线不再由梦角主动触发，
+ *     进离线只有手动这一个入口；恢复线不受影响）
  *
  * 恢复：
  *   · 手动点 🚥
@@ -31,11 +32,11 @@
 
     /* ── 常量 ───────────────────────────────────────────── */
     var GROUP_WHITELIST = '通用字卡';   // 白名单组名（改名前请同步这里）
-    var TRIP_RATE   = 0.0125;           // 自动熔断：与他"连发 3 条"同源
     var CALL_STEP   = 0.0125;           // 每喊一次累加的步长
     var CALL_CAP    = 0.30;             // 呼唤命中率上限
     var KEY_STATE   = 'emgOfflineState';
     var KEY_SNAP    = 'emgOfflineSnap';
+    var KEY_CLOUD   = 'emgOfflineCloudCfg';   // 云端配置快照（真断开前的抄本，恢复时写回）
     var DEFAULT_NAME = '梦角';
 
     /* ── 运行状态 ───────────────────────────────────────── */
@@ -80,6 +81,37 @@
     function saveSnap(v) {
         _snap = v;
         try { return localforage.setItem(KEY_SNAP, v); } catch (e) { return Promise.resolve(); }
+    }
+
+    /* ── 云端真断开（不是装样子） ──
+     * 熔断瞬间：把 CloudSync 完整配置（含 AK/Secret）抄进 localStorage 临时格子，
+     * 然后执行真正的 clearConfig() —— 和她手动点「断开连接」一模一样，
+     * 同步引擎、媒体上传、状态徽标全部跟着 isConnected() 走，整条链路真实断开。
+     * 恢复时：把配置原样写回，自动重连，她不用重新填密钥。
+     * 边界：离线期间她手动重连过（配置格子里有东西了）→ 尊重她的新配置，快照作废。
+     */
+    function cloudSnapshotSave() {
+        try {
+            var CS = global.CloudSync;
+            if (!CS || !CS.isConnected() || !CS.getConfig()) return;   // 本来就没连，没东西可断
+            localStorage.setItem(KEY_CLOUD, JSON.stringify(CS.getConfig()));
+            CS.clearConfig();
+        } catch (e) { console.warn('[emergency] 云端断开失败', e); }
+    }
+
+    function cloudSnapshotRestore() {
+        try {
+            var CS = global.CloudSync;
+            var raw = null;
+            try { raw = localStorage.getItem(KEY_CLOUD); } catch (e) {}
+            try { localStorage.removeItem(KEY_CLOUD); } catch (e) {}
+            if (!CS || !raw) return;
+            var cfg = null;
+            try { cfg = JSON.parse(raw); } catch (e) { return; }
+            if (!cfg) return;
+            if (CS.isConnected() || CS.getConfig()) return;   // 离线期间手动重连过：不动
+            CS.saveConfig(cfg);
+        } catch (e) { console.warn('[emergency] 云端恢复失败', e); }
     }
 
     /* ══════════════════════════════════════════════════════
@@ -265,6 +297,22 @@
        这里定期校正一次，保证「他」不露脸。 */
     var _guardTimer = null;
 
+    function defaultAvatarHTML() { return '<i class="fas fa-user"></i>'; }
+
+    /* 把已经画好的消息气泡头像换成默认图标。
+       场景：重进页面时消息先渲染（那时顶栏还是原头像，气泡把照片复制走了），
+       熔断贴回在后 —— 光改顶栏救不了已经画好的气泡，得逐个补。 */
+    function repaintBubbleAvatars() {
+        try {
+            var nodes = document.querySelectorAll('.message-wrapper.received .message-avatar');
+            for (var i = 0; i < nodes.length; i++) {
+                if (nodes[i].innerHTML.indexOf('<img') >= 0) {
+                    nodes[i].innerHTML = defaultAvatarHTML();
+                }
+            }
+        } catch (e) {}
+    }
+
     function startGuard() {
         stopGuard();
         _guardTimer = setInterval(function () {
@@ -334,6 +382,9 @@
             muteVoice();
             global.__emergencyFreeze = true;
 
+            // 3.5) 云端真断开（配置已抄快照，恢复时写回自动重连）
+            cloudSnapshotSave();
+
             // 4) 名字头像
             paintPartnerName(DEFAULT_NAME);
             paintPartnerAvatar(null);
@@ -385,6 +436,9 @@
             writeLS(snap.ls);
             writeVoice(snap.voice);
             global.__emergencyFreeze = false;
+
+            // 3.5) 云端写回快照配置，自动重连（离线期间她手动重连过则不动）
+            cloudSnapshotRestore();
 
             // 4) 名字头像还原
             paintPartnerName(snap.partnerName || DEFAULT_NAME);
@@ -491,14 +545,7 @@
        六、概率
        ══════════════════════════════════════════════════════ */
 
-    /** 自动熔断：每次他回复后掷一次，1.25% */
-    function maybeTrip() {
-        if (S.on || _busy) return;
-        if (Math.random() < TRIP_RATE) trip('auto');
-    }
-
-    /**
-     * 一句话算不算「在喊他」，以及有多像在喊。
+    /** 一句话算不算「在喊他」，以及有多像在喊。
      * @returns {number} 1.0 只叫名字 / 0.6 短呼唤 / 0.2 顺带提到 / 0 无关
      */
     function callWeight(text) {
@@ -771,6 +818,7 @@
             paintPartnerName(DEFAULT_NAME);
             paintPartnerAvatar(null);
             muteVoice();
+            repaintBubbleAvatars();   // 重进页面：把先渲染出来的气泡头像也换掉
             paintButton();
         });
     }
@@ -804,7 +852,6 @@
         isOn: function () { return S.on; },
         status: function () { return { on: S.on, since: S.since, calls: S.calls }; },
         _watchCall: watchCall,
-        _maybeTrip: maybeTrip,
         _callWeight: callWeight,
         /** 验收用：停留线当前状态（模式 / 已累计分钟 / 下一拍概率） */
         _dwellStatus: function () {
@@ -814,7 +861,11 @@
             return { mode: S.mode, awakeMin: S.awakeMin, p: p };
         },
         /** 供 core.js / cinema.js / companion-diary.js 组装回复池时调用 */
-        filterPool: filterPool
+        filterPool: filterPool,
+        /** core.js 画消息气泡时用：熔断中对方头像一律默认图标 */
+        defaultAvatarHTML: defaultAvatarHTML,
+        /** 验收/调试用：把已渲染的对方气泡头像统一换成默认图标 */
+        _repaintBubbles: repaintBubbleAvatars
     };
 
     if (document.readyState === 'loading') {

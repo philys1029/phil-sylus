@@ -225,8 +225,8 @@
 
     function $(id) { return document.getElementById(id); }
 
-    function notify(msg, type = 'info') {
-        if (typeof showNotification === 'function') showNotification(msg, type);
+    function notify(msg, type = 'info', duration) {
+        if (typeof showNotification === 'function') showNotification(msg, type, duration);
     }
 
     // ─── 弹窗：陪伴选择（第一层：选场景）────────────────────────────────────
@@ -2283,6 +2283,8 @@
             if (files.length === 0) return;
             let addedCount = 0;
             let skippedCount = 0;
+            let errorCount = 0;      // 格式没问题但读取/上传失败的
+            let lastErrMsg = '';
             await ensureDataLoaded();
             if (!companionData.noises[currentMode]) companionData.noises[currentMode] = [];
 
@@ -2340,15 +2342,20 @@
                     const idx = companionData.noises[currentMode].indexOf(placeholder);
                     if (idx !== -1) companionData.noises[currentMode].splice(idx, 1);
                     skippedCount++;
+                    errorCount++;
+                    lastErrMsg = (err && err.message) ? String(err.message) : '未知错误';
                 }
                 openNoiseListCard();
             }
 
             if (addedCount > 0) {
                 await saveCompanionData();
-                notify(`已添加 ${addedCount} 段音乐${skippedCount ? `（${skippedCount} 个跳过）` : ''}`, 'success');
+                notify(`已添加 ${addedCount} 段音乐${errorCount ? `（${errorCount} 段失败：${lastErrMsg}）` : (skippedCount ? `（${skippedCount} 个跳过）` : '')}`, errorCount ? 'warning' : 'success');
+            } else if (errorCount > 0) {
+                // 格式没问题、是读取/上传失败——把真实原因亮出来，别甩锅给格式
+                notify(`音乐添加失败：${lastErrMsg}（云同步已连接但上传失败时最常见，可到 数据管理 → 云端同步 检查，或断开云端后重试）`, 'error', 5000);
             } else if (skippedCount > 0) {
-                notify('请选择音频文件（mp3/m4a/wav 等），或上传失败请检查网络', 'warning');
+                notify('请选择音频文件（mp3/m4a/wav 等）', 'warning');
             }
             e.target.value = '';
         };
@@ -4125,6 +4132,8 @@
         const files = Array.from(e.target.files);
         let addedCount = 0;
         let skippedCount = 0;
+        let errorCount = 0;      // 格式没问题但读取/上传失败的（别把锅甩给格式）
+        let lastErrMsg = '';
         await ensureDataLoaded();
         const mode = _mgrState.noise;
         for (const file of files) {
@@ -4177,12 +4186,17 @@
                 const idx = companionData.noises[mode].indexOf(placeholder);
                 if (idx !== -1) companionData.noises[mode].splice(idx, 1);
                 skippedCount++;
+                errorCount++;
+                lastErrMsg = (err && err.message) ? String(err.message) : '未知错误';
             }
             renderCompanionNoiseManager();
         }
         if (addedCount > 0) {
             await saveCompanionData();
-            notify(`已添加 ${addedCount} 段音乐${skippedCount ? `（${skippedCount} 个跳过）` : ''}`, 'success');
+            notify(`已添加 ${addedCount} 段音乐${errorCount ? `（${errorCount} 段失败：${lastErrMsg}）` : (skippedCount ? `（${skippedCount} 个跳过）` : '')}`, errorCount ? 'warning' : 'success');
+        } else if (errorCount > 0) {
+            // 格式本身没问题，是读取/上传失败——把真实原因说清楚，别误导成「格式不对」
+            notify(`音乐添加失败：${lastErrMsg}（云同步已连接但上传失败时最常见，可到 数据管理 → 云端同步 检查状态，或断开云端后重试）`, 'error', 5000);
         } else if (skippedCount > 0) {
             notify('请选择音频文件（mp3/m4a/wav 等）', 'warning');
         }

@@ -81,7 +81,34 @@
         // 加回"位置"和"快问快答"这两个（凑够6个，两行各3个/4个，看起来不那么空），
         // 小红书/抖音还是先不加，功能都没做
         { id: 'location', iconClass: 'fas fa-location-dot', label: '位置', ready: false },
-        { id: 'qa', iconClass: 'fas fa-comments', label: '快问快答', ready: false }
+        { id: 'qa', iconClass: 'fas fa-comments', label: '快问快答', ready: false },
+        // 「动作」：日常主动发动作（逻辑在 js/actions.js 的 mountPicker，点后原地替换成本面板为动作格子）。
+        // 心跳线 logo（雨霏定稿 B，素材索引 §2:19-24）：心电图折线 currentColor + 红心 #C0392B，viewBox 48×32 / 34×23
+        {
+            id: 'actions',
+            svgIcon: '<svg viewBox="0 0 48 32" xmlns="http://www.w3.org/2000/svg" width="34" height="23" fill="none">' +
+                '<path d="M3 17 H13 L17 8 L22 26 L26 17 H31" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>' +
+                '<path d="M37.5 21 C33.2 17.2 31 14.6 33.2 12.3 C34.8 10.6 37.1 11.4 37.5 13.1 C37.9 11.4 40.2 10.6 41.8 12.3 C44 14.6 41.8 17.2 37.5 21 Z" fill="#C0392B"/>' +
+                '</svg>',
+            label: '动作',
+            ready: true,
+            action: function () {
+                // 熔断中整套动作系统不生效（幕布-设定.md:73）
+                if (window.EmergencyOffline && typeof window.EmergencyOffline.isOn === 'function' && window.EmergencyOffline.isOn()) {
+                    if (typeof showNotification === 'function') showNotification('熔断中，动作暂不可用', 'info', 1800);
+                    closeMoreMenu();
+                    renderMoreMenu();
+                    return;
+                }
+                const panelEl = getPanel();
+                if (panelEl && window.Actions && typeof window.Actions.mountPicker === 'function') {
+                    window.Actions.mountPicker(panelEl, function () {
+                        renderMoreMenu();  // 恢复菜单网格
+                        closeMoreMenu();   // 选完/取消后收起
+                    });
+                }
+            }
+        }
         // { id: 'xiaohongshu', iconClass: 'fas fa-book', label: '小红书', ready: false },
         // { id: 'douyin', iconClass: 'fab fa-tiktok', label: '抖音', ready: false }
     ];
@@ -105,6 +132,8 @@
     function openMoreMenu() {
         const panel = getPanel(), btn = getPlusBtn();
         if (!panel || !btn) return;
+        // 兜底：面板内容若还停留在"动作"格子（上次点外部关闭时留下的），先恢复菜单网格
+        if (!panel.querySelector('.more-menu-grid')) renderMoreMenu();
         // 跟输入区其它弹层（表情/拍一拍、收纳面板）互斥，避免叠在一起
         try {
             document.getElementById('user-sticker-picker')?.classList.remove('active');
@@ -145,13 +174,18 @@
         panel.innerHTML = '<div class="more-menu-grid">' + gridHTML + '</div>';
 
         panel.querySelectorAll('.more-menu-item').forEach(function (btnEl) {
-            btnEl.addEventListener('click', function () {
+            btnEl.addEventListener('click', function (e) {
                 const item = MORE_MENU_ITEMS.find(function (i) { return i.id === btnEl.dataset.id; });
                 if (!item) { closeMoreMenu(); return; }
                 if (item.ready && typeof item.action === 'function') {
+                    // "动作"原地替换面板内容后，原按钮已被移出 DOM——事件若继续冒泡到
+                    // document 的"点外部"监听，contains(e.target) 会变 false 被误判成外部点击，
+                    // 面板刚换好就被关掉。这里拦掉自己的冒泡，"点外部收起"对 picker 依然有效
+                    if (item.id === 'actions') e.stopPropagation();
                     // "图片"是特殊情况：面板不能在这里就收起，要等用户真的选完图、
                     // 触发发送之后才收（见下面 DOMContentLoaded 里挂在 #image-input 上的 change 监听）
-                    if (item.id !== 'image') closeMoreMenu();
+                    // "动作"同理：点后原地替换面板内容为动作格子，不能先收
+                    if (item.id !== 'image' && item.id !== 'actions') closeMoreMenu();
                     item.action();
                 } else {
                     closeMoreMenu();

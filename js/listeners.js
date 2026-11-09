@@ -349,6 +349,12 @@ if (target.classList.contains('delete-btn')) {
                 DOMElements.editModal.save.disabled = !DOMElements.editModal.input.value.trim();
             });
             DOMElements.pokeModal.save.addEventListener('click', () => {
+                // 应急熔断中：他不在线，拍不到——拦在发送前，弹窗一并收起
+                if (window.EmergencyOffline && window.EmergencyOffline.isOn()) {
+                    hideModal(DOMElements.pokeModal.modal);
+                    showNotification('他现在不在线，拍不到', 'info', 2500);
+                    return;
+                }
                 const verb = DOMElements.pokeModal.input.value.trim() || settings.myPokeText || '拍了拍';
                 let pokeText = `${settings.myName} ${verb} ${settings.partnerName}`;
                 if (typeof window._sanitizePokeTextForDisplay === 'function') {
@@ -542,6 +548,9 @@ fileInput.addEventListener('change', function(e) {
                     async () => {
                         if (currentAvatarData) {
                             updateAvatar(isPartner ? DOMElements.partner.avatar: DOMElements.me.avatar, currentAvatarData);
+                            // 2026-11-09 雨霏：换头像后整条聊天流重绘一遍——动作卡圆圈 / 展开层 / 消息头像
+                            // 立刻跟着新头像走（此前只更新顶栏，已发出的卡片要等下一条消息才刷新）
+                            if (typeof renderMessages === 'function') renderMessages(true);
                             throttledSaveData();
                             showNotification('头像已更新', 'success');
                             hideModal(modal.modal);

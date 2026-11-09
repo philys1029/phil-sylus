@@ -54,6 +54,7 @@
         'customReplies', 'customPokes', 'customStatuses', 'customMottos',
         'customIntros', 'customEmojis', 'customPeriodCare',
         'customReplyGroups', 'customPokeGroups', 'customStatusGroups',
+        'actionActs',
         // 和他一起选字卡（挑选历史 / 「他挑的」登记表）
         'mjPickHistory', 'mjPickedCards',
         // 经期记录（日历标记、每日打卡、梦角留言状态）

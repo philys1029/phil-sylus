@@ -311,7 +311,19 @@
         y += BOTTOM;
 
         var H = Math.round(y);
-        if (H * scale > 30000) scale = 1;
+        // iOS Safari 对单张 canvas 有面积上限（约 16.7M 像素），超出部分直接画不出来（留白），
+        // 这就是手机上长图「文本多了就空白」的根因。
+        // 解法：内容越长，出图倍率自动沿梯子降档 2× → 1.5× → 1× → 0.75× → 0.5×，
+        // 图永远是完整一张、可放大上下滑；代价只是超长时清晰度降一档。
+        // 正常挑选记录（几十张卡以内）都停在 2×，后面的档位是极端兜底。
+        var MAX_AREA = 16000000;   // 留了余量的 iOS 面积上限
+        var LADDER = [2, 1.5, 1, 0.75, 0.5];
+        scale = opts.scale || 2;   // scale 在函数开头已声明，这里按梯子重新落档
+        if (LADDER.indexOf(scale) === -1) scale = 2;
+        for (var li = 0; li < LADDER.length; li++) {
+            scale = LADDER[li];
+            if (BASE_W * H * scale * scale <= MAX_AREA) break;
+        }
 
         var canvas = document.createElement('canvas');
         canvas.width = Math.round(BASE_W * scale);

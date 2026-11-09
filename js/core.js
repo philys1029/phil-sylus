@@ -727,7 +727,8 @@ const LIBRARY_CONFIG = {
             { id: 'period', name: '经期', mode: 'list' },
             { id: 'redpacketBank', name: '红包祝福语', mode: 'list' },
             { id: 'mottos', name: '顶部格言', mode: 'list' },
-            { id: 'intros', name: '开场动画', mode: 'list' }
+            { id: 'intros', name: '开场动画', mode: 'list' },
+            { id: 'actionBank', name: '动作', mode: 'list' }
         ]
     }
 };
@@ -1234,6 +1235,31 @@ function createMessageFragment(msg, prevMsg, nextMsg, lastSenderRef) {
         return fragment;
     }
 
+    /* 散场留痕（幕布-设定.md:71 / 2026-11-08 雨霏定）：整宽一行小字、居中、无横线，不可点开。
+       文案 = 「{HH:MM}，他清场了」，与谁结束无关。样式由 actions.js 注入；
+       用 textContent 写入，不把内容当 HTML。 */
+    if (msg.type === 'curtain-trace') {
+        const traceDiv = document.createElement('div');
+        traceDiv.className = 'curtain-trace-msg';
+        traceDiv.dataset.msgId = msg.id;
+        const txt = document.createElement('span');
+        txt.className = 'ct-text';
+        txt.textContent = msg.text || '他清场了';
+        traceDiv.appendChild(txt);
+        fragment.appendChild(traceDiv);
+        lastSenderRef.current = 'system';
+        return fragment;
+    }
+
+    /* 同框卡（动作系统 ③）：白底卡，不走普通气泡/头像那一套 */
+    if (msg.type === 'action-card') {
+        const cardFrag = (window.Actions && typeof window.Actions.renderActionCard === 'function')
+            ? window.Actions.renderActionCard(msg) : document.createElement('div');
+        fragment.appendChild(cardFrag);
+        lastSenderRef.current = 'partner';
+        return fragment;
+    }
+
     let showTimestamp = true;
     if (settings.timeFormat === 'off') {
         showTimestamp = false;
@@ -1288,7 +1314,12 @@ function createMessageFragment(msg, prevMsg, nextMsg, lastSenderRef) {
             const avatarElement = isUser ? DOMElements.me.avatar : DOMElements.partner.avatar;
             const frameSettings = isUser ? settings.myAvatarFrame : settings.partnerAvatarFrame;
             const avatarShape = isUser ? (settings.myAvatarShape || 'circle') : (settings.partnerAvatarShape || 'circle');
-            avatarDiv.innerHTML = avatarElement.innerHTML;
+            if (!isUser && window.EmergencyOffline && window.EmergencyOffline.isOn()) {
+                // 应急熔断中：对方头像一律默认图标——顶栏此刻可能还没被换掉，直接复制会把原照片复制走
+                avatarDiv.innerHTML = window.EmergencyOffline.defaultAvatarHTML();
+            } else {
+                avatarDiv.innerHTML = avatarElement.innerHTML;
+            }
             applyAvatarFrame(avatarDiv, frameSettings);
             ['circle', 'square', 'pentagon', 'heart'].forEach(s => avatarDiv.classList.remove('shape-' + s));
             if (avatarShape !== 'none') avatarDiv.classList.add('shape-' + avatarShape);
@@ -2053,6 +2084,14 @@ const addMessage = (message) => {
     // 追没追上底部，要在"往数组里塞新消息、改动滚动高度"之前就先判断好，不然滚动高度已经变了，判断就不准了
     const wasCaughtUp = _isCaughtUpToLatest();
     messages.push(message);
+
+    // 动作系统附加 B（已定清单 §2:36）：展开层 / 就地条开着时，他在外面发消息 → 卡片震一下
+    // （2026-11-08 修：原来判 message.sender==='partner'，但站内他发消息 sender 一律是 partnerName，
+    //  判定永远不成立、震动一次都没触发过。改成「非我、非系统」就算他；action-card / curtain-trace
+    //  都不走 addMessage 或 sender='system'，天然排除。）
+    if (message.sender && message.sender !== 'user' && message.sender !== 'system' && window.Actions && typeof window.Actions.shakeOpenCards === 'function') {
+        try { window.Actions.shakeOpenCards(); } catch (e) {}
+    }
     
     if (wasEmpty) {
         DOMElements.emptyState.style.display = 'none';
@@ -2254,6 +2293,8 @@ const addMessage = (message) => {
 
         // ── 对方拍一拍核心逻辑（提取为独立函数，供随机触发和测试指令共用）──
         window._triggerPartnerPoke = function() {
+            // 应急熔断中：他不在线，不会来拍你
+            if (window.EmergencyOffline && window.EmergencyOffline.isOn()) return;
             let pokeAction = null;
 
             const groups = window.customPokeGroups || [];
@@ -2348,6 +2389,51 @@ const addMessage = (message) => {
                     _syncMessageInputHeight();
                     if (typeof window._triggerStatusChange === 'function') window._triggerStatusChange();
                     if (typeof showNotification === 'function') showNotification('✦ 强制触发状态更新', 'info', 1800);
+                    return;
+                }
+                // ── 动作系统测试：走真实链路——清场卡先发出，随后幕布拉起 ──
+                if (cmd === '/测试清场' || cmd === '/testcurtain') {
+                    DOMElements.messageInput.value = '';
+                    _syncMessageInputHeight();
+                    if (window.EmergencyOffline && window.EmergencyOffline.isOn()) {
+                        if (typeof showNotification === 'function') showNotification('应急熔断中，动作系统不生效', 'info', 2200);
+                        return;
+                    }
+                    const _curtainText = (window.Actions && typeof window.Actions.getCurtainCardText === 'function') ? window.Actions.getCurtainCardText() : '清场';
+                    addMessage({
+                        id: Date.now(),
+                        sender: settings.partnerName || '对方',
+                        text: _curtainText,
+                        timestamp: new Date(),
+                        status: 'received',
+                        favorited: false,
+                        note: null,
+                        type: 'normal'
+                    });
+                    playSound('message');
+                    if (window.Actions && typeof window.Actions.onCurtainCardSent === 'function') window.Actions.onCurtainCardSent();
+                    return;
+                }
+                if (cmd === '/测试动作' || cmd === '/testact') {
+                    DOMElements.messageInput.value = '';
+                    _syncMessageInputHeight();
+                    // 测试：带名字 = 你做句、走真实链路 userAct（他会 1.6–3s 回应）；不带 = 随机他做句
+                    const _rawParts = text.trim().split(/\s+/);
+                    const _name = _rawParts.length > 1 ? _rawParts.slice(1).join(' ') : null;
+                    if (_name && window.Actions && typeof window.Actions.userAct === 'function') {
+                        window.Actions.userAct(_name);
+                    } else if (window.Actions && typeof window.Actions.testAdd === 'function') {
+                        window.Actions.testAdd('him', null);
+                    }
+                    return;
+                }
+                if (cmd === '/测试同框卡' || cmd === '/testcard') {
+                    DOMElements.messageInput.value = '';
+                    _syncMessageInputHeight();
+                    // 测试：连发 7 条他做句——卡无上限，>6 条折叠成「最近 3 条 + 共 N 条 · 展开互动」
+                    if (window.Actions && typeof window.Actions.testAdd === 'function') {
+                        for (let _i = 0; _i < 7; _i++) window.Actions.testAdd('him', null);
+                    }
                     return;
                 }
             }
@@ -2636,8 +2722,11 @@ if (partnerPersonas && partnerPersonas.length > 0 && Math.random() < 0.3) {
             }
             // ── 对方拍一拍 和 梦角搞怪：两套判定各掷各的骰子（各 3%），互不排斥，
             //    有可能同一次同时出现；只要其中任何一个触发了，这次就不再走普通回复 ──
-            const _doPoke = Math.random() < 0.03;
-            const _doThrow = Math.random() < 0.03 && window.ThrowEgg && typeof window.ThrowEgg.partnerThrow === 'function';
+            //    应急熔断中两个都不掷：他不在在线状态，不会来拍你、也不会扔蛋糕，
+            //    而且这两个分支命中后会 return，不拦住的话熔断期会整轮不出声
+            const _emgOn = window.EmergencyOffline && window.EmergencyOffline.isOn();
+            const _doPoke = !_emgOn && Math.random() < 0.03;
+            const _doThrow = !_emgOn && Math.random() < 0.03 && window.ThrowEgg && typeof window.ThrowEgg.partnerThrow === 'function';
             if (_doPoke) {
                 // 调用提取的通用函数（同时供 /测试拍一拍 指令使用）
                 if (typeof window._triggerPartnerPoke === 'function') window._triggerPartnerPoke();
@@ -2658,6 +2747,12 @@ if (partnerPersonas && partnerPersonas.length > 0 && Math.random() < 0.3) {
             }
 
             const replyCount = Math.random() < 0.75 ? 1: (Math.random() < 0.95 ? 2: 3);
+
+            // 动作系统（③）：本轮回复前 10% 命中 → 摸一个动作，当一条字卡发（同框卡，他做句）
+            if (window.Actions && typeof window.Actions.maybeTriggerAction === 'function') {
+                window.Actions.maybeTriggerAction();
+            }
+
             if (!customReplies || customReplies.length === 0) {
                 showNotification('回复库为空，请先到「自定义回复」中添加内容', 'info', 3500);
                 return;
@@ -2691,10 +2786,8 @@ if (partnerPersonas && partnerPersonas.length > 0 && Math.random() < 0.3) {
 
             // 确认有可用回复后再展示“正在输入中”，避免空转
             showTypingIndicator();
-            // 应急：他这次开口之后，极低概率让信号灯自己亮一次（1.25%，见 emergency.js）
-            if (window.EmergencyOffline && typeof window.EmergencyOffline._maybeTrip === 'function') {
-                setTimeout(function () { window.EmergencyOffline._maybeTrip(); }, 1500);
-            }
+            // （2026-11-09 雨霏：删掉「他回复后掷 1.25% 自动熔断」——离线不再由梦角主动触发，
+            //   进离线只有手动切面板一个入口；见 emergency.js 头注释）
             let delay = 0;
             // 陪伴页静默触发时不引用用户消息（陪伴中的触发不是用户发了某条具体消息）
             const recentUserMsgs = (settings.replyEnabled && !window._companionSilentTrigger)
@@ -2722,11 +2815,24 @@ if (partnerPersonas && partnerPersonas.length > 0 && Math.random() < 0.3) {
                 }
             }
 
+            // ── 动作系统：本轮是否抽中清场卡（幕布触发）。
+            //    抽中 → 这条卡单独发出，发完拉幕布；同轮后续句子作废（他已经在幕后了）。
+            //    识别在"抽取那一刻"做（这里），不能认最终文本——拼接模式抽完会加标点。
+            //    2026-11-08 23:1x：认卡放宽为「剥掉标点/符号/空白后全等」，见 _stripPunct。
+            //    熔断不用另设开关：清场卡不进「通用字卡」组，白名单（filterPool）自动把它滤掉。
+            let _roundCurtainDrawn = false;
             for (let i = 0; i < replyCount; i++) {
                 const delayRange = settings.replyDelayMax - settings.replyDelayMin;
                 delay += settings.replyDelayMin + Math.random() * delayRange;
                 setTimeout(() => {
                     try {
+                    // 幕布：这一轮已经抽中清场卡——后续句子不再发；若这是本轮最后一句，顺手收掉"正在输入"
+                    if (_roundCurtainDrawn) {
+                        if (i === replyCount - 1) {
+                            (function(){try{if(window._typingIndicatorAutoHideTimer){clearTimeout(window._typingIndicatorAutoHideTimer);window._typingIndicatorAutoHideTimer=null;}}catch(e){}var _tiW=document.getElementById('typing-indicator-wrapper');if(_tiW){var _tiInner=_tiW.querySelector('.typing-indicator');if(_tiInner){_tiInner.classList.add('hiding');setTimeout(function(){_tiW.style.display='none';if(_tiInner)_tiInner.classList.remove('hiding');},240);}else{_tiW.style.display='none';}}})();
+                        }
+                        return;
+                    }
                     // 应急：池子是「发消息那一刻」组好的，熔断可能发生在排队期间。
                     // 所以真正开口前再按当前状态重筛一次——熔断中只留通用字卡，滤空就这条不发。
                     const replyPool = (window.EmergencyOffline && window.EmergencyOffline.isOn()
@@ -2734,6 +2840,14 @@ if (partnerPersonas && partnerPersonas.length > 0 && Math.random() < 0.3) {
                         ? window.EmergencyOffline.filterPool(replyPoolOnce)
                         : replyPoolOnce;
                     if (!replyPool.length) return;
+                    // 清场卡认卡文本（每次开口时取一次，改设置不用刷新）
+                    const _curtainCardText = (window.Actions && typeof window.Actions.getCurtainCardText === 'function') ? window.Actions.getCurtainCardText() : null;
+                    // 2026-11-08 23:1x 雨霏定：不要「一字不差」的硬限制——认卡前把两边的
+                    // 标点 / 符号 / 空白剥掉再比。库里写「清场。」「～清场～」「清 场」都认；
+                    // 但句子里含别的字（如「他说要清场了」）仍不算，避免普通回复误拉幕。
+                    const _stripPunct = (s) => String(s).replace(/[\s\p{P}\p{S}]/gu, '');
+                    const _curtainKey = _curtainCardText ? _stripPunct(_curtainCardText) : null;
+                    let _curtainThisMsg = false;
                     let replyText = '';
                     if (settings.combineReplyCards) {
                         // 拼接字卡：1 ~ combineReplyMaxCards 句随机拼接，句子间随机加标点断句
@@ -2741,12 +2855,26 @@ if (partnerPersonas && partnerPersonas.length > 0 && Math.random() < 0.3) {
                         const n = 1 + Math.floor(Math.random() * maxN);
                         for (let k = 0; k < n; k++) {
                             const picked = replyPool[Math.floor(Math.random() * replyPool.length)];
+                            // 抽中清场卡：这条卡单独发（不加标点、不和别句拼），本轮到此为止
+                            if (_curtainKey && _stripPunct(picked) === _curtainKey) {
+                                replyText = picked;
+                                _curtainThisMsg = true;
+                                _roundCurtainDrawn = true;
+                                break;
+                            }
                             replyText += picked + (Math.random() < .2 ? '！' : Math.random() < .2 ? '……' : '。');
                         }
                     } else {
                         // 开关关闭：老逻辑，只抽1句（保留原有的跳过空/无效项重试）
                         for (let t = 0; t < 6; t++) {
                             const picked = replyPool[Math.floor(Math.random() * replyPool.length)];
+                            // 抽中清场卡：照发，发完拉幕布
+                            if (_curtainKey && _stripPunct(picked) === _curtainKey) {
+                                replyText = picked;
+                                _curtainThisMsg = true;
+                                _roundCurtainDrawn = true;
+                                break;
+                            }
                             if (picked && String(picked).trim()) {
                                 replyText = String(picked).trim();
                                 break;
@@ -2768,7 +2896,8 @@ if (partnerPersonas && partnerPersonas.length > 0 && Math.random() < 0.3) {
 
                     let finalText = replyText;
                     let separateEmoji = null;
-                    if (customEmojis && customEmojis.length > 0 && Math.random() < 0.2) {
+                    // 清场卡原样发出：不混表情、不跟表情包——这张卡后面跟着的是幕布
+                    if (!_curtainThisMsg && customEmojis && customEmojis.length > 0 && Math.random() < 0.2) {
                         const emoji = customEmojis[Math.floor(Math.random() * customEmojis.length)];
                         if (settings.emojiMixEnabled !== false) {
                             finalText = Math.random() < 0.5
@@ -2797,7 +2926,12 @@ if (partnerPersonas && partnerPersonas.length > 0 && Math.random() < 0.3) {
                     }
                     playSound('message');
 
-                    if (shouldSendSticker) {
+                    // 动作系统：这条是清场卡 → 字卡已经发出，现在拉幕布
+                    if (_curtainThisMsg && window.Actions && typeof window.Actions.onCurtainCardSent === 'function') {
+                        window.Actions.onCurtainCardSent();
+                    }
+
+                    if (shouldSendSticker && !_curtainThisMsg) {
                         const randomSticker = enabledStickerPool[Math.floor(Math.random() * enabledStickerPool.length)];
                         setTimeout(() => {
                             if (window.EmergencyOffline && window.EmergencyOffline.isOn()) return;

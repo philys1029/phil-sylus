@@ -207,6 +207,12 @@ function _renderListContentOnly() {
             if (typeof window._redpacketRenderBankTab === 'function') window._redpacketRenderBankTab(list);
             return;
         }
+        else if (currentSubTab === 'actionBank') {
+            // 动作库是「16 个动作 × 他做/你做两句」的对象结构，跟纯字符串数组不是一回事，
+            // 照问卷题库的做法交给 action-bank.js 自己渲染
+            if (typeof window._actionRenderBankTab === 'function') window._actionRenderBankTab(list);
+            return;
+        }
     }
 
     if (renderType === 'emoji') { _renderEmojiTab(list, itemsToRender); return; }
@@ -249,6 +255,12 @@ function renderReplyLibrary() {
     const list = document.getElementById('custom-replies-list');
     const titleEl = document.getElementById('cr-modal-title');
     if (!list) return;
+
+    // 动作库固定 16 个动作，只能改文案、不能新增——把共享的「新增」按钮收起来，
+    // 免得点了掉进通用兜底弹出原生 prompt()
+    const _sharedAddBtn = document.getElementById('add-custom-reply');
+    if (_sharedAddBtn) _sharedAddBtn.style.display =
+        (currentMajorTab === 'atmosphere' && currentSubTab === 'actionBank') ? 'none' : '';
 
     _mjpRefresh();
 
@@ -311,6 +323,12 @@ function renderReplyLibrary() {
             if (typeof window._redpacketRenderBankTab === 'function') window._redpacketRenderBankTab(list);
             return;
         }
+        else if (currentSubTab === 'actionBank') {
+            // 动作库是「16 个动作 × 他做/你做两句」的对象结构，跟纯字符串数组不是一回事，
+            // 照问卷题库的做法交给 action-bank.js 自己渲染
+            if (typeof window._actionRenderBankTab === 'function') window._actionRenderBankTab(list);
+            return;
+        }
     }
 
     if (renderType === 'emoji') { _renderEmojiTab(list, itemsToRender); return; }
@@ -341,9 +359,9 @@ function renderReplyLibrary() {
 
 function _renderModernToolbar() {
     let toolbar = document.getElementById('batch-ops-toolbar');
-    // 问卷题库这个 tab 是自己单独一套渲染（对象结构，不是纯字符串数组），
+    // 问卷题库 / 红包留言库 / 动作库这三个 tab 都是自己单独一套渲染（对象结构，不是纯字符串数组），
     // 不走下面这套批量管理/分组/去重逻辑——那些都是照着字符串数组写的，硬塞进来只会出岔子
-    if (currentMajorTab === 'atmosphere' && (currentSubTab === 'surveyBank' || currentSubTab === 'redpacketBank')) {
+    if (currentMajorTab === 'atmosphere' && (currentSubTab === 'surveyBank' || currentSubTab === 'redpacketBank' || currentSubTab === 'actionBank')) {
         if (toolbar) toolbar.style.display = 'none';
         return;
     }
