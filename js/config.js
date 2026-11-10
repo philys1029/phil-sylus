@@ -1,8 +1,12 @@
 /*应用常量与数据结构*/
 
         const APP_PREFIX = 'CHAT_APP_V3_';
-        const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
-        const MAX_AVATAR_SIZE = 2 * 1024 * 1024;
+        /* 2026-11-10 雨霏：入口只拦「明显不像图片」的超大文件，真正的体积交给 optimizeImage 压。
+           原来的 5MB / 2MB 太紧，手机原图常常直接被挡在门外。动态那边（moments.js）压根不设上限，
+           这里统一放到 30MB，比它多一道保护线，防超大图把手机 canvas 撑爆。 */
+        const MAX_IMAGE_SIZE = 30 * 1024 * 1024;
+        const MAX_AVATAR_SIZE = 30 * 1024 * 1024;
+        const MAX_SIZE_LABEL = '30MB';
         const MESSAGES_PER_PAGE = 50;
         
         const CONSTANTS = {

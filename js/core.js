@@ -2231,7 +2231,10 @@ const addMessage = (message) => {
             });
         };
 
-        function optimizeImage(file, maxWidth = 800, quality = 0.7) {
+        /* 2026-11-10 雨霏：长边 800→1600、质量 0.7→0.82（原来聊天图片压得太狠）。
+           加两道保护：①源图超出 canvas 安全区（iOS 约 1670 万像素 / 单边 4096）时先落一步，
+           否则会得到一张全白图；②缩放比大于 2 时分两步降采样，避免一次大倍率缩图发糊。 */
+        function optimizeImage(file, maxWidth = 1600, quality = 0.82) {
             return new Promise((resolve, reject) => {
                 if (file.size < 300 * 1024) {
                     const reader = new FileReader();
@@ -2242,20 +2245,11 @@ const addMessage = (message) => {
                 }
                 const img = new Image();
                 img.onload = () => {
-                    const canvas = document.createElement('canvas');
-                    const ctx = canvas.getContext('2d');
-                    let {
-                        width,
-                        height
-                    } = img;
-                    if (width > maxWidth) {
-                        height = Math.round((height * maxWidth) / width);
-                        width = maxWidth;
+                    try {
+                        resolve(_encodeScaledImage(img, maxWidth, quality));
+                    } catch (err) {
+                        reject(err);
                     }
-                    canvas.width = width;
-                    canvas.height = height;
-                    ctx.drawImage(img, 0, 0, width, height);
-                    resolve(canvas.toDataURL('image/jpeg', quality));
                     URL.revokeObjectURL(img.src);
                 };
                 img.onerror = () => {
@@ -2267,6 +2261,60 @@ const addMessage = (message) => {
                 };
                 img.src = URL.createObjectURL(file);
             });
+        }
+
+        function _encodeScaledImage(img, maxWidth, quality) {
+            const MAX_SIDE = 4096;
+            const MAX_AREA = 16777216;
+            const srcW = img.naturalWidth || img.width;
+            const srcH = img.naturalHeight || img.height;
+            if (!srcW || !srcH) throw new Error('图片解码失败');
+
+            let width = srcW;
+            let height = srcH;
+            if (width > maxWidth) {
+                height = Math.max(1, Math.round((height * maxWidth) / width));
+                width = maxWidth;
+            }
+
+            // 源图超出画布安全区时先落到安全尺寸（大图直接 drawImage 在 iOS 上会出空白）
+            const safeK = Math.min(1, MAX_SIDE / srcW, MAX_SIDE / srcH, Math.sqrt(MAX_AREA / (srcW * srcH)));
+            let source = img;
+            let sourceW = srcW;
+            let sourceH = srcH;
+            if (safeK < 1) {
+                const safe = document.createElement('canvas');
+                safe.width = Math.max(1, Math.round(srcW * safeK));
+                safe.height = Math.max(1, Math.round(srcH * safeK));
+                const safeCtx = safe.getContext('2d');
+                safeCtx.imageSmoothingEnabled = true;
+                safeCtx.imageSmoothingQuality = 'high';
+                safeCtx.drawImage(img, 0, 0, safe.width, safe.height);
+                source = safe;
+                sourceW = safe.width;
+                sourceH = safe.height;
+            }
+
+            // 大倍率降采样：先落到目标的 2 倍，再落到目标
+            if (sourceW / width > 2) {
+                const half = document.createElement('canvas');
+                half.width = Math.min(sourceW, Math.round(width * 2));
+                half.height = Math.max(1, Math.round((sourceH * half.width) / sourceW));
+                const halfCtx = half.getContext('2d');
+                halfCtx.imageSmoothingEnabled = true;
+                halfCtx.imageSmoothingQuality = 'high';
+                halfCtx.drawImage(source, 0, 0, half.width, half.height);
+                source = half;
+            }
+
+            const out = document.createElement('canvas');
+            out.width = width;
+            out.height = height;
+            const ctx = out.getContext('2d');
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(source, 0, 0, width, height);
+            return out.toDataURL('image/jpeg', quality);
         }
 
         window.updateReplyPreview = function() {
@@ -2441,7 +2489,7 @@ const addMessage = (message) => {
             DOMElements.messageInput.value = '';
             _syncMessageInputHeight();
             if (imageFile && imageFile.size > MAX_IMAGE_SIZE) {
-                showNotification('图片大小不能超过5MB', 'error'); DOMElements.imageInput.value = ''; return;
+                showNotification('图片大小不能超过' + MAX_SIZE_LABEL, 'error'); DOMElements.imageInput.value = ''; return;
             }
 
             const createMessage = (imgSrc = null) => {
@@ -2552,9 +2600,9 @@ if (!isBatchMode && type === 'normal') {
                 batchImgInput.addEventListener('change', async (e) => {
                     const file = e.target.files[0];
                     if (!file) return;
-                    if (file.size > MAX_IMAGE_SIZE) { showNotification('图片超过5MB限制', 'warning'); return; }
+                    if (file.size > MAX_IMAGE_SIZE) { showNotification('图片超过' + MAX_SIZE_LABEL + '限制', 'warning'); return; }
                     try {
-                        const base64 = await optimizeImage(file, 600, 0.8);
+                        const base64 = await optimizeImage(file, 1200, 0.82);
                         addToBatch(base64);
                     } catch(err) { showNotification('图片处理失败', 'error'); }
                     e.target.value = '';

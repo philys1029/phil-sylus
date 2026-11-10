@@ -556,7 +556,25 @@
     return null;
   }
 
-  /* 加一条动作到同框卡（who: 'him'|'me'；name 可指定；targetCard 可指定落到哪张卡） */
+  /* 他主动发动作时的落点选取（2026-11-10 20:2x 雨霏拍板 Q1-A / Q2-A / Q3）：
+     把「最近 3 张动作卡」和「新发一张」放进同一个池子等概率抽（不足 3 张就按实际张数，不补权）。
+     中间夹着文字也照选——不再因为「先遇到普通消息」就强制新卡（Q2-A）。
+     只用于「他主动发动作」这一个入口（maybeTriggerAction）；她点名的卡不经过这里，
+     包括就地条 / 展开层 / 她刚发动作的那一张（Q3）。 */
+  var PICK_CARD_RECENT = 3;
+  function pickCardTarget() {
+    var cards = [];
+    for (var i = messages.length - 1; i >= 0 && cards.length < PICK_CARD_RECENT; i--) {
+      var m = messages[i];
+      /* 只要真有内容的卡：空卡（被清空 / 从没落过动作）不参与抽取 */
+      if (m && m.type === 'action-card' && (m.acts || []).length) cards.push(m);
+    }
+    var pool = [false].concat(cards);          /* false = 新起一张卡，见 addAct */
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+
+  /* 加一条动作到同框卡（who: 'him'|'me'；name 可指定；targetCard 可指定落到哪张卡）
+     targetCard === false → 强制新起一张卡（pickCardTarget 抽到「新发一张」时用） */
   function addAct(who, name, targetCard, text) {
     try {
       /* 熔断：本体也拦——他 1.6–3s 回应的窗口内开熔断，那条回应也不落卡（待修 #6，2026-11-08 修） */
@@ -567,8 +585,10 @@
       var a = name ? findAct(name) : null;
       var t = text || (a ? pickOne(dir === 'me' ? a.me : a.him) : pickCopy(dir));
       if (!t) t = pickCopy(dir);
-      var m = targetCard || getActiveCardMsg();
+      var m = (targetCard === false) ? null : (targetCard || getActiveCardMsg());
+      var isNewCard = false;
       if (!m) {
+        isNewCard = true;
         m = {
           type: 'action-card',
           id: 'ac_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
@@ -583,12 +603,36 @@
       if (typeof renderMessages === 'function') renderMessages();
       if (typeof throttledSaveData === 'function') throttledSaveData();
       if (_stage && _stageCard === m) stageAppend(m.acts[m.acts.length - 1]);   // 展开层开着：新动作实时滚进来
+      /* 落到的是更早那张卡 → 把它滚进视口。renderMessages 默认滚到底，不补这一步的话
+         这条动作落在上方看不见的卡里，看起来就像「他没发」。本来就看得见就不动她的滚动位置。
+         直接算偏移写 scrollTop：.chat-container 带 scroll-behavior:smooth（styles.css:898），
+         走 scrollIntoView 会被它拖成动画，跟 renderMessages 的滚底抢位置。 */
+      if (!isNewCard && !_stage && m && m.id) {
+        var aimId = m.id;
+        requestAnimationFrame(function () {
+          try {
+            var el = document.querySelector('.action-card-msg[data-msg-id="' + aimId + '"]');
+            var box = document.getElementById('chat-container');
+            if (!el || !box) return;                           // window 模式没渲染到这一段，跳过
+            var er = el.getBoundingClientRect();
+            var br = box.getBoundingClientRect();
+            if (er.top >= br.top && er.bottom <= br.bottom) return;
+            /* .chat-container 带 scroll-behavior:smooth（styles.css:898）——不压成 auto 的话，
+               scrollIntoView 会变成一段动画，跟 renderMessages 的滚底抢位置，最后停在半路。 */
+            var prevSB = box.style.scrollBehavior;
+            box.style.scrollBehavior = 'auto';
+            el.scrollIntoView({ block: 'center' });
+            box.style.scrollBehavior = prevSB;
+          } catch (e) {}
+        });
+      }
       return m;
     } catch (e) { return null; }
   }
 
   /* S1（纯打字）专用：每轮回复前 10%，跟文字回复同时刻（core.js:2752 调）。
-     动作触发的回复轮在这里跳过一次——她的那颗 10% 已经在 userAct 发出时就掷过了。 */
+     动作触发的回复轮在这里跳过一次——她的那颗 10% 已经在 userAct 发出时就掷过了。
+     命中后落点走 pickCardTarget：最近 3 张卡 + 新发一张，等概率四选一（2026-11-10 拍板）。 */
   function maybeTriggerAction() {
     if (_skipChainRoll) {
       _skipChainRoll = false;
@@ -597,7 +641,7 @@
     }
     if (window.EmergencyOffline && window.EmergencyOffline.isOn()) return; // 熔断整套不生效
     if (document.getElementById('curtain-overlay')) return;               // 幕布内不走这套概率
-    if (Math.random() < ACTION_PROB) addAct('him');
+    if (Math.random() < ACTION_PROB) addAct('him', null, pickCardTarget());
   }
 
   /* 日常主动发动作（＋菜单 picker / 展开层工具栏 / 就地条）：你做句落聊天同框卡。
@@ -606,13 +650,15 @@
         回复链的 3–7s）；文字回复照常 100% 走回复链（02:1x 口径）。
      展开层（o.stage，雨霏 11-07 12:31 原话）：动作回复 **100% 必回**（不掷骰），1.6–2.8s 落回她点的卡；
         额外掷 10%——命中才触发一次外面的文字/表情回复链（那条额外消息不是动作，链内跳过动作骰；
-        展开层开着时他发消息 → 卡片震动，core.js:2092 挂点）；不命中就不发文字。 */
+        展开层开着时他发消息 → 卡片震动，core.js:2092 挂点）；不命中就不发文字。
+     他的回应落点（2026-11-10 拍板 Q3）：她点了哪张卡就回哪张；＋面板没指定卡时回「她刚发动作的那张」（o.card || m）。
+        这里**不走** pickCardTarget——那层只给「他主动发动作」用，不然她点名的卡会被他搬到别的卡上。 */
   function userAct(name, opts) {
     var o = opts || {};
     var m = addAct('me', name, o.card, o.text);
     if (m && o.stage) {
       /* 展开层分支：100% 动作回复 + 10% 额外外面文字 */
-      setTimeout(function () { addAct('him', null, o.card || undefined); },
+      setTimeout(function () { addAct('him', null, o.card || m); },
                  1600 + Math.floor(Math.random() * 1200));
       if (Math.random() < STAGE_EXTRA_TEXT_PROB) {
         _skipChainRoll = true;                       // 额外消息不能是动作：链内跳过动作骰
@@ -627,7 +673,7 @@
     }
     var prob = (typeof o.prob === 'number') ? o.prob : ACTION_PROB;   // ＋面板 / 就地条默认 50%
     if (m && Math.random() < prob) {
-      setTimeout(function () { addAct('him', null, o.card || undefined); },
+      setTimeout(function () { addAct('him', null, o.card || m); },
                  1600 + Math.floor(Math.random() * 1200));
     }
     if (m) {
@@ -656,13 +702,11 @@
     var from = folded ? acts.length - SHOW_LAST : 0;
     var body = '';
     for (var i = from; i < acts.length; i++) body += '<div class="act">' + escapeHtml(acts[i].t) + '</div>';
-    /* 就地动作条：照 demo ⑥ 只取底部滑条这一层，无条数、无提示、无输入框 */
+    /* 就地动作条：照 demo ⑥ 只取底部滑条这一层，无条数、无提示、无输入框；
+       末尾一格「＋ 新建」→ 快捷新建动作（2026-11-10 雨霏定：滑条里也要加号选项） */
     var tray = '<div class="ac-tray"><div class="tray-inner">';
-    for (var t = 0; t < ACTS.length; t++) {
-      tray += '<button class="tb" type="button" data-name="' + escapeHtml(ACTS[t].n) + '">' +
-                '<span class="e">' + escapeHtml(ACTS[t].e) + '</span>' +
-                '<b>' + escapeHtml(ACTS[t].n) + '</b></button>';
-    }
+    for (var t = 0; t < ACTS.length; t++) tray += trayCellHtml(ACTS[t]);
+    tray += '<button class="tb tb-add" type="button"><span class="e">＋</span><b>新建</b></button>';
     tray += '</div></div>';
     wrap.innerHTML =
       '<div class="ac-card">' +
@@ -684,16 +728,13 @@
       else card.classList.toggle('open');
     });
     /* 选一条 → 落到「被点中的这张卡」（不是当前活动卡），S3 100% 必回；随后 renderMessages 重建卡片，滑条自然收起 */
-    var tbs = wrap.querySelectorAll('.tb');
-    for (var b = 0; b < tbs.length; b++) (function (btn) {
-      btn.addEventListener('click', function (e) {
-        e.stopPropagation();
-        var nm = btn.getAttribute('data-name');
-        chooseCopy(nm, 'me', function (txt) {
-          if (txt) userAct(nm, { card: msg, text: txt });   /* S3 卡内就地条：50% + 1.6–2.8s，落回这张卡；消息链照常 */
-        });
-      });
-    })(tbs[b]);
+    var tbs = wrap.querySelectorAll('.tb[data-name]');
+    for (var b = 0; b < tbs.length; b++) bindTrayCell(tbs[b], msg);
+    var trayAdd = wrap.querySelector('.tb-add');
+    if (trayAdd) trayAdd.addEventListener('click', function (e) {
+      e.stopPropagation();
+      openQuickAdd();
+    });
     return wrap;
   }
 
@@ -730,11 +771,8 @@
     var lines = '';
     for (var k = 0; k < acts.length; k++) lines += '<div class="st-line">' + escapeHtml(acts[k].t) + '</div>';
     var bar = '';
-    for (var b = 0; b < ACTS.length; b++) {
-      bar += '<div class="st-b" data-name="' + escapeHtml(ACTS[b].n) + '">' +
-        '<div class="e">' + escapeHtml(ACTS[b].e) + '</div>' +
-        '<div class="n">' + escapeHtml(ACTS[b].n) + '</div></div>';
-    }
+    for (var b = 0; b < ACTS.length; b++) bar += stageCellHtml(ACTS[b]);
+    bar += '<div class="st-b st-b-add"><div class="e">＋</div><div class="n">新建</div></div>';
 
     var ov = document.createElement('div');
     ov.className = 'mu-stage';
@@ -752,15 +790,10 @@
     document.body.appendChild(ov);
 
     /* 右侧工具栏：点 = 你做句进这张卡（addAct 里检测 _stageCard===m 自动 stageAppend） */
-    var cells = ov.querySelectorAll('.st-b');
-    for (var c = 0; c < cells.length; c++) (function (cell) {
-      cell.addEventListener('click', function () {
-        var nm = cell.getAttribute('data-name');
-        chooseCopy(nm, 'me', function (txt) {
-          if (txt) userAct(nm, { card: cardMsg, text: txt, stage: true });   /* 展开层：动作回复 100%（1.6–2.8s 落本卡）+ 额外 10% 外面文字（11-07 12:31 原话） */
-        });
-      });
-    })(cells[c]);
+    var cells = ov.querySelectorAll('.st-b[data-name]');
+    for (var c = 0; c < cells.length; c++) bindStageCell(cells[c], cardMsg);
+    var stAdd = ov.querySelector('.st-b-add');
+    if (stAdd) stAdd.addEventListener('click', function () { openQuickAdd(); });
 
     var fold = ov.querySelector('.st-fold');
     fold.addEventListener('click', function () { closeStageLayer(); });
@@ -772,18 +805,16 @@
   }
 
   /* 附加 B（已定清单 §2:36，雨霏「先记着看着办」授权）：
-     展开层 / 就地条开着时，他在外面发了文字或其他消息 → 那张卡震一下。
-     挂点 = core.js 的 addMessage（partner 消息落地统一入口），只作用于当前开着的卡。 */
+     展开层开着时，他在外面发了文字或其他消息 → 那张卡震一下。
+     2026-11-10 雨霏：只震展开层这一张。原来还会震聊天里卡底滑条拉着（open）的卡，
+     日常发动作卡片时被他外面的消息带得抖一下，很干扰，这条去掉。 */
   function shakeOpenCards() {
-    var nodes = [];
-    if (_stage) { var sc = _stage.querySelector('.st-card'); if (sc) nodes.push(sc); }
-    var opens = document.querySelectorAll('.action-card-msg .ac-card.open');
-    for (var i = 0; i < opens.length; i++) nodes.push(opens[i]);
-    for (var j = 0; j < nodes.length; j++) {
-      nodes[j].classList.remove('ac-shake');
-      void nodes[j].offsetWidth;          /* 强制回流，连续两次也能重播 */
-      nodes[j].classList.add('ac-shake');
-    }
+    if (!_stage) return;
+    var sc = _stage.querySelector('.st-card');
+    if (!sc) return;
+    sc.classList.remove('ac-shake');
+    void sc.offsetWidth;          /* 强制回流，连续两次也能重播 */
+    sc.classList.add('ac-shake');
   }
 
   function closeStageLayer(instant) {
@@ -1082,7 +1113,13 @@
     '.mu-picker-cell:active{background:rgba(192,57,43,.08)}' +
     '.mu-picker-emoji{font-size:22px;line-height:1}' +
     '.mu-picker-name{font-size:11px;color:var(--text-primary,#333)}' +
-    '.mu-picker-cancel{margin-top:10px;width:100%;height:36px;background:transparent;' +
+    /* 底栏（2026-11-10 雨霏定：取消旁边加文字按钮「＋ 新建动作」，动作格子保持纯动作） */
+    '.mu-picker-foot{display:flex;gap:8px;margin-top:10px}' +
+    '.mu-picker-foot>button{flex:1;height:36px;border-radius:10px;font-size:13px;cursor:pointer;' +
+      'font-family:inherit;-webkit-tap-highlight-color:transparent}' +
+    '.mu-picker-add{background:transparent;border:1px solid var(--border-color,rgba(0,0,0,.1));' +
+      'color:var(--accent-color,#c5a47e)}' +
+    '.mu-picker-cancel{background:transparent;' +
       'border:1px solid var(--border-color,rgba(0,0,0,.1));border-radius:10px;font-size:13px;' +
       'color:var(--text-secondary,#666);cursor:pointer;-webkit-tap-highlight-color:transparent}' +
     '@keyframes mu-picker-in{from{opacity:0}to{opacity:1}}' +
@@ -1109,7 +1146,39 @@
     '.mu-copy-it:active{background:rgba(192,57,43,.08)}' +
     '.mu-copy-cancel{margin-top:2px;width:100%;height:36px;background:transparent;' +
       'border:1px solid var(--border-color,rgba(0,0,0,.1));border-radius:10px;font-size:13px;' +
-      'color:var(--text-secondary,#666);cursor:pointer;font-family:inherit}';
+      'color:var(--text-secondary,#666);cursor:pointer;font-family:inherit}' +
+    /* 快捷新建动作（2026-11-10 雨霏定：三入口共用 E2-A 轻量弹层 + 「打开完整动作库」跳转）
+       三个入口的「＋」格：就地条 / 展开层侧栏 */
+    '.action-card-msg .tb-add{opacity:.72}' +
+    '.action-card-msg .tb-add .e{font-size:17px;color:var(--text-secondary,#999)}' +
+    '.action-card-msg .tb-add b{color:var(--text-secondary,#999)}' +
+    '.mu-stage .st-b-add{background:rgba(255,255,255,.05);border:.5px dashed rgba(255,255,255,.34)}' +
+    '.mu-stage .st-b-add .n{color:rgba(242,237,230,.82)}' +
+    '.qa{position:fixed;inset:0;z-index:1000006;background:rgba(0,0,0,.35);' +
+      'display:flex;align-items:center;justify-content:center;animation:mu-picker-in .18s ease;' +
+      'font-family:-apple-system,"PingFang SC",sans-serif}' +
+    '.qa-card{width:min(340px,88%);max-height:84%;overflow-y:auto;background:var(--primary-bg,#fff);' +
+      'border-radius:16px;padding:16px;box-sizing:border-box}' +
+    '.qa-title{font-size:14px;font-weight:700;color:var(--text-primary,#333);text-align:center;margin-bottom:12px}' +
+    '.qa-row{display:flex;gap:8px;margin-bottom:10px}' +
+    '.qa-e{width:56px;flex:0 0 56px;height:38px;box-sizing:border-box;text-align:center;font-size:18px;' +
+      'border:1px solid var(--border-color,rgba(0,0,0,.1));border-radius:10px;background:var(--toolbar-btn-bg,#f7f7f7);' +
+      'color:var(--text-primary,#333);font-family:inherit;outline:none}' +
+    '.qa-n{flex:1;min-width:0;height:38px;box-sizing:border-box;padding:0 10px;font-size:13px;font-weight:700;' +
+      'border:1px solid var(--border-color,rgba(0,0,0,.1));border-radius:10px;background:var(--toolbar-btn-bg,#f7f7f7);' +
+      'color:var(--text-primary,#333);font-family:inherit;outline:none}' +
+    '.qa-lab{display:block;font-size:11px;color:var(--text-secondary,#666);margin:0 0 4px}' +
+    '.qa-ta{width:100%;box-sizing:border-box;min-height:58px;padding:8px 10px;border-radius:10px;' +
+      'border:1px solid var(--border-color,rgba(0,0,0,.1));background:var(--toolbar-btn-bg,#f7f7f7);' +
+      'color:var(--text-primary,#333);font-size:12px;line-height:1.6;font-family:inherit;resize:vertical;outline:none}' +
+    '.qa-foot{display:flex;gap:8px;margin-top:14px}' +
+    '.qa-btn{flex:1;height:38px;border-radius:10px;font-size:13px;cursor:pointer;font-family:inherit;' +
+      '-webkit-tap-highlight-color:transparent}' +
+    '.qa-cancel{background:transparent;border:1px solid var(--border-color,rgba(0,0,0,.1));color:var(--text-secondary,#666)}' +
+    '.qa-save{background:var(--accent-color,#c5a47e);border:none;color:#fff;font-weight:700}' +
+    '.qa-more{display:block;width:100%;margin-top:10px;height:34px;background:transparent;border:none;' +
+      'color:var(--text-secondary,#666);font-size:12px;cursor:pointer;font-family:inherit;' +
+      'text-decoration:underline;-webkit-tap-highlight-color:transparent}';
 
   function ensureStyles() {
     if (document.getElementById('curtain-style')) return;
@@ -1231,6 +1300,184 @@
     ov.addEventListener('click', function (e) { if (e.target === ov) close(null); });
   }
 
+  /* ───── 快捷新建动作（2026-11-10 雨霏定）─────
+     三入口共用：＋面板底栏「＋ 新建动作」/ 卡内就地条末格「＋」/ 展开层侧栏「＋」。
+     弹层：emoji、动作名、他做、你做（一行一句，可多句）；存完只入库、不自动发（E3-A）。
+     弹层里再给一条「打开完整动作库」，跳到 内容管理 → 氛围感 → 动作 做精细编辑（E2-A + 跳转）。
+     持久化交给 action-bank.js 的 _actionBankAppend（同一套 storage key，不另存一份）。 */
+
+  var _pickerHost = null;   // 当前挂着的＋面板（container + onDone），新增动作后用来原地重挂
+
+  function trayCellHtml(a) {
+    return '<button class="tb" type="button" data-name="' + escapeHtml(a.n) + '">' +
+      '<span class="e">' + escapeHtml(a.e) + '</span>' +
+      '<b>' + escapeHtml(a.n) + '</b></button>';
+  }
+
+  function stageCellHtml(a) {
+    return '<div class="st-b" data-name="' + escapeHtml(a.n) + '">' +
+      '<div class="e">' + escapeHtml(a.e) + '</div>' +
+      '<div class="n">' + escapeHtml(a.n) + '</div></div>';
+  }
+
+  /* 卡内就地条：落回被点的这张卡（S3，50% + 1.6–2.8s） */
+  function bindTrayCell(btn, msg) {
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var nm = btn.getAttribute('data-name');
+      chooseCopy(nm, 'me', function (txt) {
+        if (txt) userAct(nm, { card: msg, text: txt });
+      });
+    });
+  }
+
+  /* 展开层侧栏：动作回复 100%（1.6–2.8s 落本卡）+ 额外 10% 外面文字（11-07 12:31 原话） */
+  function bindStageCell(cell, cardMsg) {
+    cell.addEventListener('click', function () {
+      var nm = cell.getAttribute('data-name');
+      chooseCopy(nm, 'me', function (txt) {
+        if (txt) userAct(nm, { card: cardMsg, text: txt, stage: true });
+      });
+    });
+  }
+
+  function qaLines(text) {
+    return String(text || '').split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+  }
+
+  function qaWarn(msg) {
+    if (typeof showNotification === 'function') showNotification(msg, 'warning');
+    else alert(msg);
+  }
+
+  /* 跳到完整编辑页：内容管理 → 氛围感 → 动作（复用现成 tab，不重造编辑器） */
+  function openActionBankPanel() {
+    try {
+      var modal = document.getElementById('custom-replies-modal');
+      if (!modal) { qaWarn('找不到内容管理面板，刷新一下再试'); return; }
+      if (typeof showModal === 'function') showModal(modal); else modal.style.display = 'flex';
+      var major = modal.querySelector('.sidebar-btn[data-major="atmosphere"]');
+      if (major) major.click();                     // 子 tab 由这次点击重画
+      var pickTab = function () {
+        var tab = modal.querySelector('.reply-tab-btn[data-id="actionBank"]');
+        if (tab) tab.click();
+      };
+      pickTab();
+      setTimeout(pickTab, 80);                      // 兜一次：子 tab 重画若走异步
+    } catch (e) {}
+  }
+
+  /* 存完刷新三处已开着的入口，新动作立刻能点（不自动发） */
+  function refreshActHosts() {
+    var i, last = ACTS[ACTS.length - 1];
+    /* ＋面板：整块重挂（分页可能从 1 页变 2 页），滚到最后一页让新动作可见 */
+    if (_pickerHost && _pickerHost.container && document.body.contains(_pickerHost.container)) {
+      var hostC = _pickerHost.container, hostDone = _pickerHost.onDone;
+      mountPicker(hostC, hostDone);
+      var vp = hostC.querySelector('.mu-picker-viewport');
+      if (vp) vp.scrollLeft = vp.scrollWidth;
+    }
+    /* 卡内就地条：插在「＋ 新建」格前面 */
+    var inners = document.querySelectorAll('.ac-tray .tray-inner');
+    if (last && inners.length) {
+      for (i = 0; i < inners.length; i++) {
+        var host = inners[i];
+        var holder = document.createElement('div');
+        holder.innerHTML = trayCellHtml(last);
+        var node = holder.firstChild;
+        if (!node) continue;
+        var wrapEl = host.parentNode;
+        while (wrapEl && !(wrapEl.classList && wrapEl.classList.contains('action-card-msg'))) wrapEl = wrapEl.parentNode;
+        var msgObj = null;
+        if (wrapEl && wrapEl.dataset && wrapEl.dataset.msgId) {
+          for (var k = 0; k < messages.length; k++) {
+            if (messages[k] && messages[k].id === wrapEl.dataset.msgId) { msgObj = messages[k]; break; }
+          }
+        }
+        bindTrayCell(node, msgObj);
+        host.insertBefore(node, host.querySelector('.tb-add'));
+      }
+    }
+    /* 展开层侧栏：插在「＋ 新建」格前面（与滑条/面板同款位置），顺带更新条数 */
+    if (_stage && last) {
+      var barEl = _stage.querySelector('.st-bar');
+      var cnt = _stage.querySelector('.st-cnt');
+      if (barEl) {
+        var addEl = barEl.querySelector('.st-b-add');
+        var h2 = document.createElement('div');
+        h2.innerHTML = stageCellHtml(last);
+        var node2 = h2.firstChild;
+        if (node2) {
+          bindStageCell(node2, _stageCard);
+          barEl.insertBefore(node2, addEl || cnt || null);
+        }
+      }
+      if (cnt) cnt.textContent = '↓ 竖滑共 ' + ACTS.length;
+    }
+  }
+
+  function openQuickAdd() {
+    var ov = document.createElement('div');
+    ov.className = 'qa';
+    ov.innerHTML =
+      '<div class="qa-card">' +
+        '<div class="qa-title">新建动作</div>' +
+        '<div class="qa-row">' +
+          '<input class="qa-e" maxlength="4" placeholder="💗" value="💗">' +
+          '<input class="qa-n" maxlength="10" placeholder="动作名（如：牵手）">' +
+        '</div>' +
+        '<label class="qa-lab">他做（一行一句，可多句）</label>' +
+        '<textarea class="qa-ta qa-him" placeholder="他做的一句话"></textarea>' +
+        '<label class="qa-lab" style="margin-top:10px;">你做（一行一句，可多句）</label>' +
+        '<textarea class="qa-ta qa-me" placeholder="你做的一句话"></textarea>' +
+        '<div class="qa-foot">' +
+          '<button class="qa-btn qa-cancel" type="button">取消</button>' +
+          '<button class="qa-btn qa-save" type="button">保存</button>' +
+        '</div>' +
+        '<button class="qa-more" type="button">打开完整动作库</button>' +
+      '</div>';
+    document.body.appendChild(ov);
+
+    var done = false;
+    function close() {
+      if (done) return;
+      done = true;
+      if (ov.parentNode) ov.parentNode.removeChild(ov);
+    }
+
+    ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
+    ov.querySelector('.qa-cancel').addEventListener('click', close);
+    /* 跳完整库：先把当前入口收起来，别让菜单/展开层压在内容管理上面 */
+    ov.querySelector('.qa-more').addEventListener('click', function () {
+      close();
+      if (_stage) closeStageLayer(true);
+      if (_pickerHost && typeof _pickerHost.onDone === 'function') _pickerHost.onDone();
+      openActionBankPanel();
+    });
+    ov.querySelector('.qa-save').addEventListener('click', function () {
+      var n = ov.querySelector('.qa-n').value.trim();
+      var e = ov.querySelector('.qa-e').value.trim() || '💗';
+      var him = qaLines(ov.querySelector('.qa-him').value);
+      var me = qaLines(ov.querySelector('.qa-me').value);
+      if (!n) { qaWarn('动作名还没填'); return; }
+      for (var i = 0; i < ACTS.length; i++) {
+        if (ACTS[i].n === n) { qaWarn('已经有叫「' + n + '」的动作了，换个名字'); return; }
+      }
+      if (!him.length || !me.length) { qaWarn('他做 / 你做至少各要一句'); return; }
+      if (typeof window._actionBankAppend !== 'function') { qaWarn('动作库没加载好，刷新一下再试'); return; }
+      /* 2026-11-10 修：append 改同步返回（内存生效即 true），界面立刻刷新；
+         写盘在 action-bank 后台跑、失败自己会提醒。不再让 UI 等存储 IO。 */
+      var ok = false;
+      try { ok = window._actionBankAppend({ n: n, e: e, him: him, me: me }); } catch (err) { ok = false; }
+      if (!ok) { qaWarn('保存失败，再试一次'); return; }
+      close();
+      refreshActHosts();
+      if (typeof showNotification === 'function') showNotification('✓ 已添加动作「' + n + '」', 'success');
+    });
+
+    setTimeout(function () { try { ov.querySelector('.qa-n').focus(); } catch (e) {} }, 60);
+  }
+
   /* 日常主动发动作：挂进加号菜单面板（原地替换，more-menu.js 调用）。
      点动作格 = 发"你做"句进同框卡（userAct，复用无上限累积/折叠 + 他 1.6–3s 必回应）；
      onDone 由 more-menu 提供：恢复菜单网格并收起面板。 */
@@ -1259,7 +1506,11 @@
     container.innerHTML = '<div class="mu-picker">' +
       (PAGES.length > 1 ? '<div class="mu-picker-dots">' + dots + '</div>' : '') +
       '<div class="mu-picker-viewport"><div class="mu-picker-track">' + track + '</div></div>' +
-      '<button class="mu-picker-cancel">取消</button></div>';
+      '<div class="mu-picker-foot">' +
+        '<button class="mu-picker-add" type="button">＋ 新建动作</button>' +
+        '<button class="mu-picker-cancel" type="button">取消</button>' +
+      '</div></div>';
+    _pickerHost = { container: container, onDone: onDone };
 
     if (PAGES.length > 1) {
       var vp = container.querySelector('.mu-picker-viewport');
@@ -1277,14 +1528,18 @@
         chooseCopy(nm, 'me', function (txt) {
           if (txt) userAct(nm, { text: txt });   /* S2 ＋面板：50% + 1.6–2.8s（默认骰），消息回复链照常走 */
         });
+        _pickerHost = null;
         if (typeof onDone === 'function') onDone();
       });
     })(cells[k]);
 
     var cancel = container.querySelector('.mu-picker-cancel');
     if (cancel) cancel.addEventListener('click', function () {
+      _pickerHost = null;
       if (typeof onDone === 'function') onDone();
     });
+    var pAdd = container.querySelector('.mu-picker-add');
+    if (pAdd) pAdd.addEventListener('click', function () { openQuickAdd(); });
   }
 
   window.Actions = {
@@ -1310,6 +1565,9 @@
     _fangguoDebug: function () { if (_live) endCurtain('fangguo'); },
     _pickCopy: pickCopy,
     _copyPool: copyPool,
-    _liveRoll: liveRoll
+    _liveRoll: liveRoll,
+    /* 仅自验用（2026-11-10）：落点选取与落卡，探针直接调，界面上没有入口 */
+    _pickCardTarget: pickCardTarget,
+    _addActDebug: addAct
   };
 })();

@@ -491,24 +491,36 @@ if (target.classList.contains('delete-btn')) {
 
 fileInput.addEventListener('change', function(e) {
     const file = e.target.files[0];
-    if (file) {
-        if (file.size > MAX_AVATAR_SIZE) {
-            showNotification('头像图片不能超过2MB', 'error');
-            return;
-        }
+    fileInput.value = '';                      // 清掉，方便连选同一张重新构图
+    if (!file) return;
+    if (file.size > MAX_AVATAR_SIZE) {
+        showNotification('头像图片不能超过' + MAX_SIZE_LABEL, 'error');
+        return;
+    }
 
-        showNotification('正在裁剪处理...', 'info', 1000);
-        
-        cropImageToSquare(file, 300).then(base64Data => {
-            currentAvatarData = base64Data;
-            previewImg.src = currentAvatarData;
-            previewDiv.style.display = 'block';
-            saveBtn.disabled = false;
-        }).catch(err => {
+    /* 2026-11-10 雨霏：头像改成手动裁剪（圆形取景框 + 拖动 + 缩放），
+       不再自动居中切方形；AvatarCropper 没加载时退回老的 cropImageToSquare。 */
+    const applyAvatar = (base64Data) => {
+        currentAvatarData = base64Data;
+        previewImg.src = currentAvatarData;
+        previewDiv.style.display = 'block';
+        saveBtn.disabled = false;
+    };
+
+    if (window.AvatarCropper) {
+        window.AvatarCropper.open(file, { size: 512 }).then(applyAvatar).catch(err => {
+            if (err && err.message === 'cancel') return;
             console.error(err);
             showNotification('图片处理失败', 'error');
         });
+        return;
     }
+
+    showNotification('正在裁剪处理...', 'info', 1000);
+    cropImageToSquare(file, 300).then(applyAvatar).catch(err => {
+        console.error(err);
+        showNotification('图片处理失败', 'error');
+    });
 });
 
 
@@ -3506,7 +3518,7 @@ playlist.style.top = (rect.top + (player.classList.contains('collapsed') ? 65 : 
                     const file = e.target.files[0];
                     if (file) {
                         if (file.size > MAX_IMAGE_SIZE) {
-                            showNotification('图片大小不能超过5MB', 'error');
+                            showNotification('图片大小不能超过' + MAX_SIZE_LABEL, 'error');
                             return;
                         }
                         showNotification('正在优化图片...', 'info', 1500);

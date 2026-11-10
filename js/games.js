@@ -1937,9 +1937,9 @@ function initComboMenu() {
         modal.querySelector('#my-sticker-newgroup-upload-label').onclick = function () { fileInput.click(); };
         fileInput.addEventListener('change', function () {
             var files = Array.from(fileInput.files || []);
-            var oversized = files.filter(function (f) { return f.size > 2 * 1024 * 1024; });
-            if (oversized.length) showNotification(oversized.length + ' 张图片超过2MB，已跳过', 'warning');
-            pendingFiles = pendingFiles.concat(files.filter(function (f) { return f.size <= 2 * 1024 * 1024; }));
+            var oversized = files.filter(function (f) { return f.size > MAX_IMAGE_SIZE; });
+            if (oversized.length) showNotification(oversized.length + ' 张图片超过' + MAX_SIZE_LABEL + '，已跳过', 'warning');
+            pendingFiles = pendingFiles.concat(files.filter(function (f) { return f.size <= MAX_IMAGE_SIZE; }));
             renderPreview();
             fileInput.value = '';
         });
@@ -1959,7 +1959,7 @@ function initComboMenu() {
             var newEntries = [];
             for (var i = 0; i < pendingFiles.length; i++) {
                 try {
-                    var base64 = await optimizeImage(pendingFiles[i], 300, 0.8);
+                    var base64 = await optimizeImage(pendingFiles[i], 640, 0.86);
                     var toStore = base64;
                     if (cloudReady) {
                         try {

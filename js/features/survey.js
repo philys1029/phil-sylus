@@ -460,17 +460,25 @@
             fileInput.onchange = function () {
                 var file = fileInput.files && fileInput.files[0];
                 if (!file) return;
-                if (file.size > 2 * 1024 * 1024) {
-                    showNotification && showNotification('图片不能超过2MB', 'error');
+                if (file.size > MAX_IMAGE_SIZE) {
+                    showNotification && showNotification('图片不能超过' + MAX_SIZE_LABEL, 'error');
                     fileInput.value = '';
                     return;
                 }
-                var reader = new FileReader();
-                reader.onload = function () {
-                    opt.value = reader.result;
-                    _renderDraftQuestions();
-                };
-                reader.readAsDataURL(file);
+                /* 2026-11-10 雨霏：原来是不压缩直接存原图 base64（2MB 上限就是为了不撑爆存储），
+                   现在入口放到 30MB，就必须先压一道再存，否则问卷数据会被一张图撑大。 */
+                var fill = function (data) { opt.value = data; _renderDraftQuestions(); };
+                if (typeof optimizeImage === 'function') {
+                    optimizeImage(file, 800, 0.82).then(fill).catch(function () {
+                        var fb = new FileReader();
+                        fb.onload = function () { fill(fb.result); };
+                        fb.readAsDataURL(file);
+                    });
+                } else {
+                    var reader = new FileReader();
+                    reader.onload = function () { fill(reader.result); };
+                    reader.readAsDataURL(file);
+                }
             };
             pickLabel.appendChild(fileInput);
             wrap.appendChild(pickLabel);

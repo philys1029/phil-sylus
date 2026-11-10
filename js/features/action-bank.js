@@ -236,6 +236,40 @@
         });
     }
 
+    /* 快捷新增（2026-11-10 雨霏定）：＋面板 / 卡内滑条 / 展开层侧栏的「＋」共用。
+       追加一个动作并保存，走编辑页同一套链（applyCustomActs + _save），
+       不另开 storage key —— 免得快捷口和编辑页各存一份、读的时候打架。
+       入参 {n,e,him:[],me:[]}。
+       2026-11-10 修（雨霏报「展开层开着要刷新才出现」）：原来返回 Promise、
+       UI 刷新串在 _save 后面——IndexedDB 忙时（手机上大写入排队）要等数秒，
+       三个入口全都干等。现在内存生效即返回 true、界面立刻刷新；
+       写盘转后台，失败单独提醒（此时刷新页面会丢，提醒她导出备份）。 */
+    window._actionBankAppend = function (act) {
+        if (!act || !act.n) return false;
+        var cur = [], acts = _currentActs();
+        for (var i = 0; i < acts.length; i++) {
+            cur.push({
+                n: acts[i].n,
+                e: acts[i].e || '',
+                him: (acts[i].him || []).slice(),
+                me: (acts[i].me || []).slice()
+            });
+        }
+        cur.push({
+            n: act.n,
+            e: act.e || '',
+            him: (act.him || []).slice(),
+            me: (act.me || []).slice()
+        });
+        if (!(window.Actions && window.Actions.applyCustomActs(cur))) return false;
+        _save(cur).catch(function () {
+            if (typeof showNotification === 'function') {
+                showNotification('动作「' + act.n + '」已加上，但本地保存失败——建议马上导出备份', 'warning');
+            }
+        });
+        return true;
+    };
+
     window._actionRenderBankTab = _renderBankTab;
     _load();
 })();

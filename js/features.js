@@ -713,7 +713,7 @@ function showPokeTab() {
                     const file = e.target.files[0];
                     if (file) {
                         if (file.size > MAX_IMAGE_SIZE) {
-                            showNotification('图片大小不能超过5MB', 'error');
+                            showNotification('图片大小不能超过' + MAX_SIZE_LABEL, 'error');
                             return;
                         }
                         showNotification('正在优化图片...', 'info', 1500);
