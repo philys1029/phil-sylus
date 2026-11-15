@@ -639,6 +639,7 @@ window.csSwitchTab=function(tab){
     if(tab==='mood'&&typeof window._moodInit==='function')window._moodInit();
     if(tab==='ann'&&typeof window._annInit==='function')window._annInit();
     if(tab==='cinema'&&typeof window._cinemaInit==='function')window._cinemaInit();
+    if(tab==='music'&&typeof window._mlInit==='function')window._mlInit();
 
     // 切离 feed 后兜底清除 feed title（IntersectionObserver 可能异步残留）
     if(tab!=='feed'){

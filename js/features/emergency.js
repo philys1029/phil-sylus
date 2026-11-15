@@ -640,6 +640,8 @@
             + '#emg-menu.open{display:block;}'
             + '#emg-menu .emg-menu-title{font-size:11px;color:#9a938a;'
             + 'padding:2px 6px 8px;letter-spacing:.05em;}'
+            + '#emg-menu .emg-mi-music{margin-bottom:4px;border-bottom:1px solid #efe9dd;'
+            + 'border-radius:9px 9px 0 0;padding-bottom:11px;font-size:13px;color:#6f665a;}'
             + '#emg-menu button{display:flex;align-items:center;gap:8px;width:100%;'
             + 'border:none;background:transparent;border-radius:9px;'
             + 'padding:9px 10px;font-size:14px;color:#3d3a35;cursor:pointer;text-align:left;}'
@@ -719,6 +721,8 @@
         var menu = document.createElement('div');
         menu.id = 'emg-menu';
         menu.innerHTML = '<div class="emg-menu-title">应急开关</div>'
+            + '<button type="button" class="emg-mi-music" data-act="music">'
+            + '<span class="emg-music-label">🎧 让他开始听歌</span></button>'
             + '<button type="button" class="emg-mi-start" data-act="online">'
             + '<span class="emg-mi-dot"></span>在线'
             + '<span class="emg-mi-cur">当前</span></button>'
@@ -729,6 +733,10 @@
             var b = ev.target.closest('button[data-act]');
             if (!b) return;
             closeMenu();
+            if (b.dataset.act === 'music') {
+                try { if (window.MusicListen && window.MusicListen.toggleListening) window.MusicListen.toggleListening(); } catch (e) {}
+                return;
+            }
             if (b.dataset.act === 'online') {
                 if (!S.on) return;         // 已经在线，点了不出声
                 recover('manual');
@@ -755,6 +763,13 @@
         if (bEnd) {
             bEnd.disabled = false;
             bEnd.classList.toggle('is-cur', S.on);
+        }
+        // 🎧 行文案跟着听歌状态变（功能加在应急设置里，不改原有在线/离线行为）
+        var bMusic = menu.querySelector('.emg-music-label');
+        if (bMusic) {
+            var lis = false;
+            try { lis = !!(window.MusicListen && window.MusicListen.isListening && window.MusicListen.isListening()); } catch (e) {}
+            bMusic.textContent = lis ? '⏸ 他在听歌 · 点这里让他停' : '🎧 让他开始听歌';
         }
     }
 
@@ -787,7 +802,7 @@
         closeMenu();
     }
 
-    /** 点灯 = 开/收面板；真正开与关都在面板里的两个按钮上 */
+    /** 点灯 = 开/收面板（原样，未被听歌接管）；🎧 开关在面板里新增的一行 */
     function onButton(ev) {
         ev.stopPropagation();
         var menu = document.getElementById('emg-menu');
