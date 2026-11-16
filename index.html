@@ -21,7 +21,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/localforage/1.10.0/localforage.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
-    <link rel="stylesheet" href="css/styles.css?v=20261116g">
+    <link rel="stylesheet" href="css/styles.css?v=20261116r1">
     <link rel="stylesheet" href="css/companion.css">
     <link rel="stylesheet" href="css/cinema.css">
     <link rel="stylesheet" href="css/period.css">
@@ -256,7 +256,7 @@ html[data-theme="dark"] #cs-transition-overlay{background:radial-gradient(circle
                 <button id="companion-btn" class="action-btn" title="陪伴"><i class="fas fa-hand-holding-heart"></i></button>
                 <button id="daily-greeting-btn" class="action-btn" title="今日公告" onclick="reopenDailyGreeting()"><i class="fas fa-newspaper" style="font-size:16px;"></i></button>
                 <button id="moments-header-btn" class="action-btn" title="情侣空间" onclick="openMomentsWithTransition()" style="position:relative;">
-                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;margin:auto;"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M21 12l-9 -9l-9 9h2v7a2 2 0 0 0 2 2h6"/><path d="M9 21v-6a2 2 0 0 1 2 -2h2c.39 0 .754 .112 1.061 .304"/><path d="M19 21.5l2.518 -2.58a1.74 1.74 0 0 0 0 -2.413a1.627 1.627 0 0 0 -2.346 0l-.168 .172l-.168 -.172a1.627 1.627 0 0 0 -2.346 0a1.74 1.74 0 0 0 0 2.412l2.51 2.59z"/></svg>
+                    <i class="ti ti-home-heart" style="font-size:19px;"></i>
                     <span id="moments-header-badge" style="display:none;position:absolute;top:3px;right:3px;width:7px;height:7px;background:var(--accent-color);border-radius:50%;border:1.5px solid var(--primary-bg);pointer-events:none;"></span>
                 </button>
                 <button id="settings-btn" class="action-btn" title="设置" style="position:relative;">
@@ -590,7 +590,6 @@ html[data-theme="dark"] #cs-transition-overlay{background:radial-gradient(circle
                 <button class="cs-pill"             id="csp-mood"    onclick="csSwitchTab('mood')"   title="心情手账"><span class="cs-pill-icon"></span></button>
                 <button class="cs-pill"             id="csp-ann"     onclick="csSwitchTab('ann')"    title="纪念日"><span class="cs-pill-icon"></span></button>
                 <button class="cs-pill"             id="csp-cinema"  onclick="csSwitchTab('cinema')" title="电影院"><span class="cs-pill-icon"></span></button>
-                <button class="cs-pill"             id="csp-music"   onclick="csSwitchTab('music')"  title="听歌"><span class="cs-pill-icon"></span><span id="ml-listening-dot" style="display:none;position:absolute;top:3px;right:3px;width:7px;height:7px;background:#7ee08a;border-radius:50%;border:1.5px solid var(--primary-bg);pointer-events:none;"></span></button>
             </div>
         </div>
     </div>
@@ -703,10 +702,6 @@ html[data-theme="dark"] #cs-transition-overlay{background:radial-gradient(circle
         </div>
         <div class="cs-panel" id="cs-panel-cinema">
             <!-- 内容由 cinema.js 动态填充 -->
-        </div>
-        <div class="cs-panel" id="cs-panel-music">
-            <!-- 「他在听歌」0.5：内容由 music-listen.js 渲染进 #ml-body -->
-            <div id="ml-body"></div>
         </div>
 
         <!-- 档案页（全屏覆盖，陪伴日记风格）
@@ -3693,7 +3688,7 @@ html[data-theme="dark"] #cs-transition-overlay{background:radial-gradient(circle
     <!-- == 功能模块 == -->
     <script src="js/features/mood.js"></script>
     <script src="js/features/envelope.js"></script>
-    <script src="js/features/moments.js?v=20261116a"></script>
+    <script src="js/features/moments.js?v=20261116r1"></script>
     <script src="js/features/album.js"></script>
     <script src="js/features/reply-library.js?v=20261108e"></script>
     <script src="js/features/theme-editor.js"></script>
@@ -3718,18 +3713,17 @@ html[data-theme="dark"] #cs-transition-overlay{background:radial-gradient(circle
     <script src="js/features/companion-diary.js?v=20261030a"></script>
     <script src="js/features/voice-tts.js"></script>
     <script src="js/cloud-sync.js"></script>
-    <script src="js/cloud-sync-engine.js?v=20261116a"></script>
+    <script src="js/cloud-sync-engine.js?v=20261108b"></script>
     <script src="js/cloud-media.js"></script>
     <script src="js/cloud-media-migration.js"></script>
     <script src="js/cloud-sync-ui.js"></script>
     <script src="js/app.js?v=20261110c"></script>
     <script src="js/features/cinema.js?v=20261030a"></script>
-    <script src="js/features/music-listen.js?v=20261116i"></script>
     <script src="js/features/global-msg-banner.js"></script>
     <script src="js/features/survey.js?v=20261110c"></script>
     <script src="js/features/mj-pick-image.js?v=20261108e"></script>
     <script src="js/features/mj-pick.js?v=20261108e"></script>
-    <script src="js/features/emergency.js?v=20261116c"></script>
+    <script src="js/features/emergency.js?v=20261109a"></script>
     <script src="js/features/more-menu.js?v=20261108f"></script>
     <script src="js/vendor/gsap.min.js"></script>
     <script src="js/features/throw-egg.js?v=20261108e"></script>

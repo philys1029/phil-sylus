@@ -57,8 +57,6 @@
         'actionActs',
         // 和他一起选字卡（挑选历史 / 「他挑的」登记表）
         'mjPickHistory', 'mjPickedCards',
-        // 「他在听歌」0.5（music-listen.js：音乐数据 / 听歌状态 / 听歌记录——纯文字数据，不进 GitHub 仓库）
-        'ncmMusicData', 'ncmListenState', 'ncmListenRecords',
         // 经期记录（日历标记、每日打卡、梦角留言状态）
         'periodData',
         // 调查问卷（我问梦角/梦角问我，图片选项是 oss:// 引用或未配置OSS时的本地 base64，体积小）
