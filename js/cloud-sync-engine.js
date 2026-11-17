@@ -31,9 +31,11 @@
 
     // 动作卡片的专属云端文件（2026-11-17 雨霏定：单独通道，只装动作，
     // 不碰整体 text-data.json；整体同步里 actionActs 照旧保留，两条路并存）
+    // 2026-11-17 二修（雨霏报「电脑推了手机拉不到」）：原路径按 SESSION_ID 分目录，
+    // 电脑/手机是两个会话，各推各的互相看不见。改成不分会的固定路径——
+    // 同一个梦角的动作库就一份，谁推都写这里，谁拉都读这里。
     function _actionObjectKey() {
-        var sid = (typeof SESSION_ID !== 'undefined' && SESSION_ID) ? SESSION_ID : 'default';
-        return 'sync/' + sid + '/action-acts.json';
+        return 'sync/action-acts.json';
     }
 
     // 从 payload 中提取梦角名字（partnerName）用于展示

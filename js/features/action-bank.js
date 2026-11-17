@@ -95,6 +95,26 @@
         return String(t).split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
     }
 
+    /* 2026-11-17 挪到文件作用域：全量导入面板（reply-library.js）和字卡转动作
+       向导也要用同一套归一化/合并逻辑，原来闭在 _renderBankTab 里够不着。 */
+    function _normAct(x) {
+        return { n: x.n, e: x.e || '', him: (x.him || []).slice(), me: (x.me || []).slice() };
+    }
+
+    /* 追加合并：按名字判断，重名保留现有；返回 {list, added} */
+    function _mergeActs(cur, incoming) {
+        var seen = {};
+        for (var i = 0; i < cur.length; i++) seen[cur[i].n] = true;
+        var added = 0;
+        for (var j = 0; j < incoming.length; j++) {
+            if (!incoming[j] || !incoming[j].n || seen[incoming[j].n]) continue;
+            cur.push(_normAct(incoming[j]));
+            seen[incoming[j].n] = true;
+            added++;
+        }
+        return { list: cur, added: added };
+    }
+
     function _renderBankTab(list) {
         var acts = _currentActs();
         if (!acts.length) {
@@ -247,27 +267,9 @@
         /* ═══ 2026-11-17 雨霏定：单独导出/导入动作卡片 + 动作专属云同步 ═══
            弹窗复用字卡导入的 _showIOSheet（reply-library.js），导入方式
            单选文字原样：「追加」/「覆盖」，默认追加。追加按动作名字去重，
-           重名的保留现有、只加新的；覆盖 = 整表替换。 */
+           重名的保留现有、只加新的；覆盖 = 整表替换。
+           （_normAct / _mergeActs 已挪到文件作用域，全量导入面板共用） */
 
-        function _normAct(x) {
-            return { n: x.n, e: x.e || '', him: (x.him || []).slice(), me: (x.me || []).slice() };
-        }
-
-        /* 追加合并：按名字判断，重名保留现有；返回 {list, added} */
-        function _mergeActs(cur, incoming) {
-            var seen = {};
-            for (var i = 0; i < cur.length; i++) seen[cur[i].n] = true;
-            var added = 0;
-            for (var j = 0; j < incoming.length; j++) {
-                if (!incoming[j] || !incoming[j].n || seen[incoming[j].n]) continue;
-                cur.push(_normAct(incoming[j]));
-                seen[incoming[j].n] = true;
-                added++;
-            }
-            return { list: cur, added: added };
-        }
-
-        /* 导入弹窗：导入文件 / 云端拉取共用。文字跟字卡导入界面一致。 */
         function _showActsImportSheet(incoming) {
             if (typeof _showIOSheet !== 'function') {
                 if (typeof showNotification === 'function') showNotification('导入界面组件没加载好，刷新页面再试', 'error');
@@ -427,6 +429,65 @@
         _save(cur).catch(function () {
             if (typeof showNotification === 'function') {
                 showNotification('动作「' + act.n + '」已加上，但本地保存失败——建议马上导出备份', 'warning');
+            }
+        });
+        return true;
+    };
+
+    /* ═══ 2026-11-17 雨霏定：给外面用的三个口子 ═══
+       1) _actionBankList：全量导出面板拿动作清单（同步返回深拷贝；没加载好返回 []）
+       2) _actionBankImportBatch：全量导入面板批量写动作，mode 'append'|'overwrite'
+       3) _actionBankAddTo：字卡转动作向导「加入已有动作」——往指定动作的某一侧追加文案
+       都走 applyCustomActs + _save 同一条链，不另开存储。 */
+
+    window._actionBankList = function () {
+        return _currentActs().map(_normAct);
+    };
+
+    /* 返回 {total, added}；数据或动作库不合法返回 null */
+    window._actionBankImportBatch = function (incoming, mode) {
+        if (!Array.isArray(incoming)) return null;
+        var next, added;
+        if (mode === 'overwrite') {
+            next = incoming.filter(function (x) { return x && x.n; }).map(_normAct);
+            added = next.length;
+        } else {
+            var cur = _currentActs().map(_normAct);
+            var r = _mergeActs(cur, incoming);
+            next = r.list;
+            added = r.added;
+        }
+        if (!(window.Actions && window.Actions.applyCustomActs(next))) return null;
+        _save(next).catch(function () {
+            if (typeof showNotification === 'function') {
+                showNotification('动作已生效，但本地保存失败——建议马上导出备份', 'warning');
+            }
+        });
+        return { total: next.length, added: added };
+    };
+
+    /* name=动作名；side 'him'|'me'；lines=[句子]。同句不重复加。
+       找不到动作 / 一句有效文案都没有 → false；全部已存在（没加新的）→ true */
+    window._actionBankAddTo = function (name, side, lines) {
+        if (!name || (side !== 'him' && side !== 'me') || !Array.isArray(lines) || !lines.length) return false;
+        var cur = _currentActs().map(_normAct);
+        var hit = null;
+        for (var i = 0; i < cur.length; i++) {
+            if (cur[i].n === name) { hit = cur[i]; break; }
+        }
+        if (!hit) return false;
+        var added = 0;
+        for (var j = 0; j < lines.length; j++) {
+            var s = String(lines[j] || '').trim();
+            if (!s || hit[side].indexOf(s) !== -1) continue;
+            hit[side].push(s);
+            added++;
+        }
+        if (!added) return true;
+        if (!(window.Actions && window.Actions.applyCustomActs(cur))) return false;
+        _save(cur).catch(function () {
+            if (typeof showNotification === 'function') {
+                showNotification('动作「' + name + '」已更新，但本地保存失败——建议马上导出备份', 'warning');
             }
         });
         return true;

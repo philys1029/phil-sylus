@@ -1039,6 +1039,8 @@ function _showActWizard(item, index) {
     const W = {
         t1: '动作由谁发出？', opts1: ['他', '你'],
         t2: '什么动作？', nameHint: '动作名称', emojiHint: '图标', btn2: '下一步',
+        pickBtn: '📚 已有动作', pickTitle: '把这句加进哪个动作？',
+        pickSub: '选中后沿用它的名字和图标，直接进下一步', pickEmpty: '动作库里还没有动作，先新建一个吧',
         t3: '动作文案', autoHint: '已自动填入字卡文本，可改可不动', btn3: '下一步',
         t4: '原字卡要删除吗？', opts4: ['保留', '删除'], btnDel: '确认删除？',
         done: '动作已放进动作库'
@@ -1051,6 +1053,10 @@ function _showActWizard(item, index) {
     let autoText = main;        // 第3步：自动侧内容（可改）
     let otherText = '';         // 第3步：另一侧（可留空）
     let step4Choice = '';       // 第4步：'' | 'keep' | 'del'
+    /* 2026-11-17 雨霏定：第2步可改「加入已有动作」——沿用选中动作的名字/图标，
+       文案追加进它的对应侧，不再新建动作。picking = 正在看已有动作列表。 */
+    let toExisting = false;
+    let picking = false;
 
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.6);backdrop-filter:blur(10px);display:flex;align-items:flex-end;justify-content:center;animation:fadeIn 0.2s ease;';
@@ -1112,15 +1118,51 @@ function _showActWizard(item, index) {
                 b.onclick = () => { dir = b.dataset.d; step = 2; render(); };
             });
         } else if (step === 2) {
+            if (picking) {
+                const acts = (window._actionBankList ? window._actionBankList() : []);
+                const escHtml = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+                body.innerHTML = `
+                    <div style="font-size:16px;font-weight:700;color:var(--text-primary);margin-bottom:4px;">${W.pickTitle}</div>
+                    <div style="font-size:11px;color:var(--text-secondary);margin-bottom:12px;">${W.pickSub}</div>
+                    <div style="display:flex;flex-direction:column;gap:8px;">
+                        ${acts.length ? acts.map((a, i) => `
+                            <button class="aw-choice" data-i="${i}" style="text-align:left;padding:11px 14px;display:flex;align-items:center;gap:8px;">
+                                <span style="font-size:16px;flex-shrink:0;">${escHtml(a.e || '💗')}</span>
+                                <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(a.n)}</span>
+                                <span style="font-size:10px;color:var(--text-secondary);flex-shrink:0;">他${(a.him || []).length} · 你${(a.me || []).length}</span>
+                            </button>`).join('')
+                        : `<div style="font-size:12px;color:var(--text-secondary);padding:8px 0;">${W.pickEmpty}</div>`}
+                    </div>`;
+                foot.innerHTML = '';
+                body.querySelectorAll('.aw-choice').forEach(b => {
+                    b.onclick = () => {
+                        const a = acts[Number(b.dataset.i)];
+                        if (!a) return;
+                        name = a.n;
+                        emoji = a.e || '💗';
+                        toExisting = true;
+                        picking = false;
+                        step = 3; render();
+                    };
+                });
+                return;
+            }
             body.innerHTML = `
-                <div style="font-size:16px;font-weight:700;color:var(--text-primary);margin-bottom:14px;">${W.t2}</div>
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
+                    <div style="font-size:16px;font-weight:700;color:var(--text-primary);flex:1;">${W.t2}</div>
+                    <button id="aw-pick" style="font-size:11px;padding:6px 11px;border:1.5px solid var(--border-color);border-radius:9px;background:none;color:var(--text-secondary);cursor:pointer;font-family:var(--font-family);white-space:nowrap;flex-shrink:0;">${W.pickBtn}</button>
+                </div>
                 <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px;">${W.nameHint}</div>
                 <input class="aw-input" id="aw-name" maxlength="10" value="${name.replace(/"/g, '&quot;')}">
                 <div style="font-size:11px;color:var(--text-secondary);margin:12px 0 4px;">${W.emojiHint}</div>
                 <input class="aw-input" id="aw-emoji" maxlength="4" value="${emoji.replace(/"/g, '&quot;')}" style="width:88px;text-align:center;font-size:16px;">`;
             foot.innerHTML = `<button class="aw-btn" id="aw-next2">${W.btn2}</button>`;
+            overlay.querySelector('#aw-pick').onclick = () => { picking = true; render(); };
             overlay.querySelector('#aw-next2').onclick = () => {
-                name = overlay.querySelector('#aw-name').value.trim() || main.slice(0, 6);
+                const newName = overlay.querySelector('#aw-name').value.trim() || main.slice(0, 6);
+                /* 名字被改过 → 不再算「加入已有」，按新建走 */
+                if (newName !== name) toExisting = false;
+                name = newName;
                 emoji = overlay.querySelector('#aw-emoji').value.trim();
                 step = 3; render();
             };
@@ -1166,8 +1208,18 @@ function _showActWizard(item, index) {
             if (typeof showNotification === 'function') showNotification('至少要有一句文案', 'warning');
             return;
         }
-        if (!(window._actionBankAppend && window._actionBankAppend({ n: name, e: emoji, him: him, me: me }))) {
-            if (typeof showNotification === 'function') showNotification('动作库没加载好，转存失败', 'warning');
+        let ok;
+        if (toExisting) {
+            /* 加入已有动作：文案追加进对应侧，另一侧文案（如有）追加到对面 */
+            ok = typeof window._actionBankAddTo === 'function' && window._actionBankAddTo(name, dir, [autoText]);
+            if (ok && otherText) window._actionBankAddTo(name, dir === 'him' ? 'me' : 'him', [otherText]);
+        } else {
+            ok = !!(window._actionBankAppend && window._actionBankAppend({ n: name, e: emoji, him: him, me: me }));
+        }
+        if (!ok) {
+            if (typeof showNotification === 'function') {
+                showNotification(toExisting ? '动作库里找不到「' + name + '」，刷新页面再试' : '动作库没加载好，转存失败', 'warning');
+            }
             return;
         }
         _markCardConverted(item);
@@ -1179,11 +1231,14 @@ function _showActWizard(item, index) {
             throttledSaveData();
         }
         close();
-        if (typeof showNotification === 'function') showNotification('✓ ' + W.done, 'success', 3000);
+        const doneMsg = toExisting ? '已加进「' + name + '」' : W.done;
+        if (typeof showNotification === 'function') showNotification('✓ ' + doneMsg, 'success', 3000);
         renderReplyLibrary();
     }
 
     overlay.querySelector('#aw-back').onclick = () => {
+        /* 正在看已有动作列表：先退回输入界面，不退步数 */
+        if (step === 2 && picking) { picking = false; render(); return; }
         if (step === 2) { name = overlay.querySelector('#aw-name') ? overlay.querySelector('#aw-name').value.trim() || name : name;
             emoji = overlay.querySelector('#aw-emoji') ? overlay.querySelector('#aw-emoji').value.trim() : emoji; }
         if (step === 3) { autoText = overlay.querySelector('#aw-auto') ? overlay.querySelector('#aw-auto').value.trim() : autoText;
@@ -1833,6 +1888,8 @@ function _showExportUI() {
         { id: '_re_intros',   icon: ICONS.play,      label: '开场动画',      count: customIntros.length,                      key: 'customIntros' },
         { id: '_re_period',   icon: ICONS.dot,       label: '经期关心话术',  count: customPeriodCare.length,                  key: 'customPeriodCare' },
         { id: '_re_emojis',   icon: ICONS.smile,     label: 'Emoji 库',      count: customEmojis.length,                      key: 'customEmojis' },
+        /* 2026-11-17 雨霏定：全量导出也带上动作卡片 */
+        { id: '_re_acts',     icon: ICONS.magic,     label: '动作卡片',      count: (window._actionBankList ? window._actionBankList() : []).length,  key: 'actionActs' },
         { id: '_re_ann',      icon: ICONS.folderBig, label: '今日公告配置',  count: _annTotalCount,                           key: 'announcementConfig' },
         { id: '_re_groups',   icon: ICONS.folderBig, label: '字卡分组',      count: (customReplyGroups||[]).length,            key: 'customReplyGroups',  extra: true },
         { id: '_re_pokg',     icon: ICONS.folderBig, label: '拍一拍分组',    count: (window.customPokeGroups||[]).length,     key: 'customPokeGroups',   extra: true },
@@ -1953,6 +2010,8 @@ function _doExport(selectedModules) {
         else if (m.key === 'customIntros')     { libraryData.customIntros       = customIntros;                   libraryData.modules.push('intros'); }
         else if (m.key === 'customPeriodCare') { libraryData.customPeriodCare   = customPeriodCare;                libraryData.modules.push('period'); }
         else if (m.key === 'customEmojis')     { libraryData.customEmojis       = customEmojis;                   libraryData.modules.push('emojis'); }
+        /* 2026-11-17 雨霏定：导出动作卡片（走 action-bank 同一份内存） */
+        else if (m.key === 'actionActs')       { libraryData.actionActs         = (window._actionBankList ? window._actionBankList() : []); libraryData.modules.push('actionActs'); }
         else if (m.key === 'customReplyGroups')  { libraryData.customReplyGroups  = window.customReplyGroups  || []; libraryData.modules.push('groups'); }
         else if (m.key === 'customPokeGroups')   { libraryData.customPokeGroups   = window.customPokeGroups   || []; libraryData.modules.push('pokeGroups'); }
         else if (m.key === 'customStatusGroups') { libraryData.customStatusGroups = window.customStatusGroups || []; libraryData.modules.push('statusGroups'); }
@@ -2155,7 +2214,7 @@ function _normalizeImportData(data) {
 function _showImportUI(data) {
     const knownFields = ['customReplies','customPokes','customStatuses','customMottos','customIntros','customEmojis','customPeriodCare',
                          'customReplyGroups','customPokeGroups','customStatusGroups',
-                         'announcementConfig','announcementText','announcementStatusPool'];
+                         'announcementConfig','announcementText','announcementStatusPool','actionActs'];
     const hasValid = knownFields.some(f => data[f] !== undefined && data[f] !== null);
     if (!hasValid) { showNotification('无效的字卡备份文件', 'error'); return; }
 
@@ -2177,6 +2236,8 @@ function _showImportUI(data) {
         { id: '_ri_intros',   icon: ICONS.play,      label: '开场动画',      data: data.customIntros,        key: 'customIntros' },
         { id: '_ri_period',   icon: ICONS.dot,       label: '经期关心话术',  data: data.customPeriodCare,     key: 'customPeriodCare' },
         { id: '_ri_emojis',   icon: ICONS.smile,     label: 'Emoji 库',      data: data.customEmojis,        key: 'customEmojis' },
+        /* 2026-11-17 雨霏定：全量导入也认动作卡片（文件里没有就不显示这行） */
+        { id: '_ri_acts',     icon: ICONS.magic,     label: '动作卡片',      data: data.actionActs,          key: 'actionActs' },
         { id: '_ri_ann',      icon: ICONS.folderBig, label: '今日公告配置',  data: [_annCfg],                key: 'announcementConfig',    displayCount: _annCfgCount },
         { id: '_ri_anntext',  icon: ICONS.comment,   label: '公告文案',      data: [_annText],               key: 'announcementText',      displayCount: _annTextCount },
         { id: '_ri_annpool',  icon: ICONS.dot,       label: '状态随机库',    data: _annPool,                 key: 'announcementStatusPool', displayCount: _annPoolCount },
@@ -2187,6 +2248,9 @@ function _showImportUI(data) {
 
     _showIOSheet(`导入字卡`, `文件中包含 ${modules.length} 个模块`, modules, ICONS.import, (selected, mode) => {
         if (!selected.length) { showNotification('请至少选择一项', 'error'); return; }
+        if (selected.some(m => m.key === 'actionActs') && typeof window._actionBankImportBatch !== 'function') {
+            showNotification('动作模块没加载好，刷新页面再试', 'error'); return;
+        }
         try {
             const overwrite = mode === 'overwrite';
             let totalAdded = 0;
@@ -2199,6 +2263,7 @@ function _showImportUI(data) {
                     else if (m.key === 'customIntros')     { customIntros                = data.customIntros;        totalAdded += data.customIntros.length; }
                     else if (m.key === 'customPeriodCare') { customPeriodCare            = data.customPeriodCare;    totalAdded += data.customPeriodCare.length; }
                     else if (m.key === 'customEmojis')     { customEmojis                = data.customEmojis; }
+                    else if (m.key === 'actionActs')       { const r = window._actionBankImportBatch(data.actionActs, 'overwrite'); if (r) totalAdded += r.total; }
                     else if (m.key === 'customReplyGroups')  { window.customReplyGroups  = data.customReplyGroups; }
                     else if (m.key === 'customPokeGroups')   { window.customPokeGroups   = data.customPokeGroups; }
                     else if (m.key === 'customStatusGroups') { window.customStatusGroups = data.customStatusGroups; }
@@ -2243,6 +2308,9 @@ function _showImportUI(data) {
                         totalAdded += customPeriodCare.length - before;
                     } else if (m.key === 'customEmojis') {
                         customEmojis = [...new Set([...customEmojis, ...data.customEmojis])];
+                    } else if (m.key === 'actionActs') {
+                        const r = window._actionBankImportBatch(data.actionActs, 'append');
+                        if (r) totalAdded += r.added;
                     } else if (m.key === 'customReplyGroups') {
                         if (!window.customReplyGroups) window.customReplyGroups = [];
                         data.customReplyGroups.forEach(dg => {
