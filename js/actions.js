@@ -483,13 +483,16 @@
 
   var ACTS = DEFAULT_ACTS.map(function (a, i) { return normalizeAct(a, i); });
 
-  /* 5-2 数量无上限（§9）：任意长度；每个动作 him / me 至少各一句。原地替换，保持引用。 */
+  /* 5-2 数量无上限（§9）：任意长度。2026-11-17 雨霏定：允许只写一侧——
+     字卡转录进来的动作另一侧可以留空，等她想到再去编辑页补；
+     空侧被点名时走 addAct 里的 pickCopy 兜底（本文件 586-587），不会发空白。
+     两侧都空才算无效。原地替换，保持引用。 */
   function applyCustomActs(arr) {
     if (!Array.isArray(arr) || !arr.length) return false;
     var next = [];
     for (var i = 0; i < arr.length; i++) {
       var a = normalizeAct(arr[i], i);
-      if (!a.him.length || !a.me.length) return false;
+      if (!a.him.length && !a.me.length) return false;
       next.push(a);
     }
     ACTS.length = 0;

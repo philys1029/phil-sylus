@@ -173,6 +173,17 @@ function _renderListContentOnly() {
     const list = document.getElementById('custom-replies-list');
     if (!list) return;
 
+    /* D1a 配套（同 renderReplyLibrary） */
+    const _ctxKey = currentMajorTab + '/' + currentSubTab;
+    const _sameView = (_ctxKey === _rlLastListCtx);
+    if (!_sameView) {
+        _rlExpandedBlocks.clear();
+        if (!_rlDidLoadRestore) _rlLoadExpand(_ctxKey).forEach(k => _rlExpandedBlocks.add(k));
+    }
+    _rlDidLoadRestore = true;
+    _rlLastListCtx = _ctxKey;
+    const _prevScroll = _sameView ? list.scrollTop : 0;
+
     _mjpRefresh();
 
     const toolbar = document.getElementById('batch-ops-toolbar');
@@ -238,6 +249,9 @@ function _renderListContentOnly() {
     } else {
         _renderAtmosphereList(list, filtered);
     }
+
+    /* D1a：还原滚动位置 */
+    if (_sameView && _prevScroll > 0) list.scrollTop = _prevScroll;
 }
 
 let _rlRafId = null;
@@ -255,6 +269,17 @@ function renderReplyLibrary() {
     const list = document.getElementById('custom-replies-list');
     const titleEl = document.getElementById('cr-modal-title');
     if (!list) return;
+
+    /* D1a 配套：换视图（大tab/子tab）就重置展开记忆；同一视图内重画则还原滚动位置 */
+    const _ctxKey = currentMajorTab + '/' + currentSubTab;
+    const _sameView = (_ctxKey === _rlLastListCtx);
+    if (!_sameView) {
+        _rlExpandedBlocks.clear();
+        if (!_rlDidLoadRestore) _rlLoadExpand(_ctxKey).forEach(k => _rlExpandedBlocks.add(k));
+    }
+    _rlDidLoadRestore = true;
+    _rlLastListCtx = _ctxKey;
+    const _prevScroll = _sameView ? list.scrollTop : 0;
 
     // 动作库固定 16 个动作，只能改文案、不能新增——把共享的「新增」按钮收起来，
     // 免得点了掉进通用兜底弹出原生 prompt()
@@ -355,6 +380,9 @@ function renderReplyLibrary() {
     } else {
         _renderAtmosphereList(list, filtered);
     }
+
+    /* D1a：重画完把滚动位置放回去（内容结构没变，直接用旧 scrollTop 即可） */
+    if (_sameView && _prevScroll > 0) list.scrollTop = _prevScroll;
 }
 
 function _renderModernToolbar() {
@@ -704,7 +732,7 @@ function _renderCardViewWithGroups(list, items) {
 
     if (_activeGroupFilter === null) {
         if (!groups || groups.length === 0) {
-            _renderCardList(list, itemsWithIdx, disabledSet);
+            _renderCardList(list, itemsWithIdx, disabledSet, '__all');
             return;
         }
 
@@ -731,7 +759,7 @@ function _renderCardViewWithGroups(list, items) {
         if (ungrouped.length === 0) {
             list.innerHTML = renderEmptyState('所有内容均已分组');
         } else {
-            _renderCardList(list, ungrouped, disabledSet);
+            _renderCardList(list, ungrouped, disabledSet, '__ungrouped');
         }
     } else {
         const g = groups.find(g => g.id === _activeGroupFilter);
@@ -740,7 +768,7 @@ function _renderCardViewWithGroups(list, items) {
         if (filtered.length === 0) {
             list.innerHTML = renderEmptyState('此分组暂无内容');
         } else {
-            _renderCardList(list, filtered, disabledSet);
+            _renderCardList(list, filtered, disabledSet, _activeGroupFilter || '__all');
         }
     }
 }
@@ -791,7 +819,7 @@ function _renderGroupBlock(list, group, groupItems, disabledSet, isUngrouped = f
     if (groupItems.length === 0) {
         body.innerHTML = `<div style="padding:18px;text-align:center;font-size:12px;color:var(--text-secondary);opacity:0.6;">此分组暂无内容</div>`;
     } else {
-        _renderCardList(body, groupItems, disabledSet);
+        _renderCardList(body, groupItems, disabledSet, group.id || '__ungrouped');
     }
 
     section.querySelector('.grp-select-all-btn')?.addEventListener('click', e => {
@@ -832,9 +860,31 @@ function _renderGroupBlock(list, group, groupItems, disabledSet, isUngrouped = f
 
 const _CARD_PAGE_SIZE = 80; // 每次最多渲染 80 张，超过时追加"显示更多"
 
-function _renderCardList(container, itemsWithIdx, disabledSet) {
+/* D1a（2026-11-17 雨霏拍板）：「显示剩余」展开要被记住。
+   点过展开的分组块记进 _rlExpandedBlocks，之后任何重画（编辑/删除/屏蔽/分组/转动作）都保持展开；
+   切换大 tab / 子 tab 时重置（_renderReplyLibrary 里的 _ctxKey 比对）。 */
+const _rlExpandedBlocks = new Set();
+let _rlLastListCtx = null;
+/* 刷新页面后也保持展开：展开过的块按视图（大tab/子tab）记进 sessionStorage，
+   页面重新加载后第一次渲染该视图时读回来；同一次会话内切 tab 仍照旧重置。 */
+let _rlDidLoadRestore = false;
+const _RL_LS_PREFIX = 'rlExpanded:';
+function _rlPersistExpand() {
+    try {
+        sessionStorage.setItem(_RL_LS_PREFIX + (_rlLastListCtx || ''), JSON.stringify([..._rlExpandedBlocks]));
+    } catch (e) {}
+}
+function _rlLoadExpand(ctxKey) {
+    let arr = [];
+    try { arr = JSON.parse(sessionStorage.getItem(_RL_LS_PREFIX + ctxKey) || '[]'); } catch (e) {}
+    return Array.isArray(arr) ? arr : [];
+}
+
+function _renderCardList(container, itemsWithIdx, disabledSet, expandKey) {
     const total = itemsWithIdx.length;
-    const toRender = itemsWithIdx.slice(0, _CARD_PAGE_SIZE);
+    const _ek = expandKey || '__all';
+    const _wasExpanded = _rlExpandedBlocks.has(_ek);
+    const toRender = _wasExpanded ? itemsWithIdx : itemsWithIdx.slice(0, _CARD_PAGE_SIZE);
     const remaining = total - toRender.length;
 
     const frag = document.createDocumentFragment();
@@ -847,6 +897,8 @@ function _renderCardList(container, itemsWithIdx, disabledSet) {
         btn.style.cssText = 'width:100%;padding:10px;margin-top:4px;border:1.5px dashed var(--border-color);border-radius:12px;background:transparent;color:var(--text-secondary);font-size:12px;cursor:pointer;font-family:var(--font-family);';
         btn.textContent = `显示剩余 ${remaining} 条`;
         btn.onclick = () => {
+            _rlExpandedBlocks.add(_ek);
+            _rlPersistExpand();
             btn.remove();
             const moreFrag = document.createDocumentFragment();
             itemsWithIdx.slice(_CARD_PAGE_SIZE).forEach(({ text, idx }) => {
@@ -917,6 +969,10 @@ function _createCard(item, index, disabledSet) {
         return div;
     }
 
+    /* 2026-11-17 雨霏定：只主字卡页加「转成动作」入口；转过的卡带「已转」小标 */
+    const _showToAct = currentMajorTab === 'reply' && currentSubTab === 'custom';
+    const _converted = _showToAct && _convertedCards().has(item);
+
     div.innerHTML = `
         <div style="flex:1;min-width:0;${isDisabled ? 'opacity:0.4;text-decoration:line-through;' : ''}">
             <div style="display:flex;align-items:flex-start;gap:0;">${displayText}</div>
@@ -934,6 +990,11 @@ function _createCard(item, index, disabledSet) {
                 <button class="rl-act-btn" data-action="edit" title="编辑">
                     ${ICONS.edit}
                 </button>
+                ${_showToAct ? `
+                <button class="rl-act-btn" data-action="toact" title="转成动作" style="position:relative;">
+                    ${ICONS.magic}
+                    ${_converted ? `<span style="position:absolute;top:-5px;right:-5px;font-size:9px;background:var(--accent-color);color:#fff;border-radius:8px;padding:0 4px;line-height:13px;pointer-events:none;">已转</span>` : ''}
+                </button>` : ''}
                 <button class="rl-act-btn danger" data-action="delete" title="删除">
                     ${ICONS.trash}
                 </button>
@@ -945,8 +1006,192 @@ function _createCard(item, index, disabledSet) {
     div.querySelector('[data-action="edit"]').onclick = (e) => { e.stopPropagation(); editItem(index, item); };
     div.querySelector('[data-action="disable"]').onclick = (e) => { e.stopPropagation(); _toggleItemDisable(item); };
     div.querySelector('[data-action="tag"]').onclick = (e) => { e.stopPropagation(); _showSingleItemGroupPicker(item, _getGroupCtx()); };
+    const _toactBtn = div.querySelector('[data-action="toact"]');
+    if (_toactBtn) _toactBtn.onclick = (e) => { e.stopPropagation(); _showActWizard(item, index); };
 
     return div;
+}
+
+/* ═══ 2026-11-17 雨霏定：字卡 → 动作 四步向导 ═══
+   文案全部按她的定稿（2026-11-17 17:4x 回传）：
+   第1步「动作由谁发出？」他/你 → 第2步「什么动作？」名称+图标，有下一步键
+   → 第3步「动作文案」自动侧可改，另一侧可留空（校验已放开）
+   → 第4步「原字卡要删除吗？」保留直接完成；删除要过「确认删除？」键。
+   轻量化：空侧不发提示不占位，她自己去动作编辑页补。 */
+
+let _convCache = null;
+function _convertedCards() {
+    if (_convCache) return _convCache;
+    let arr = [];
+    try { arr = JSON.parse(localStorage.getItem('convertedActionCards') || '[]'); } catch (e) {}
+    if (!Array.isArray(arr)) arr = [];
+    _convCache = new Set(arr);
+    return _convCache;
+}
+function _markCardConverted(text) {
+    const s = _convertedCards();
+    s.add(text);
+    try { localStorage.setItem('convertedActionCards', JSON.stringify([...s])); } catch (e) {}
+}
+
+function _showActWizard(item, index) {
+    const main = (item.split('|')[0] || item).trim() || item.trim();
+    const W = {
+        t1: '动作由谁发出？', opts1: ['他', '你'],
+        t2: '什么动作？', nameHint: '动作名称', emojiHint: '图标', btn2: '下一步',
+        t3: '动作文案', autoHint: '已自动填入字卡文本，可改可不动', btn3: '下一步',
+        t4: '原字卡要删除吗？', opts4: ['保留', '删除'], btnDel: '确认删除？',
+        done: '动作已放进动作库'
+    };
+
+    let step = 1;
+    let dir = 'him';            // 第1步选的方向
+    let name = main.slice(0, 6);
+    let emoji = '💗';
+    let autoText = main;        // 第3步：自动侧内容（可改）
+    let otherText = '';         // 第3步：另一侧（可留空）
+    let step4Choice = '';       // 第4步：'' | 'keep' | 'del'
+
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.6);backdrop-filter:blur(10px);display:flex;align-items:flex-end;justify-content:center;animation:fadeIn 0.2s ease;';
+    overlay.innerHTML = `
+        <style>
+            @keyframes fadeIn { from{opacity:0} to{opacity:1} }
+            @keyframes slideUpSheet { from{transform:translateY(100%)} to{transform:translateY(0)} }
+            .aw-choice { flex:1;padding:12px 0;border-radius:11px;text-align:center;font-size:13px;cursor:pointer;font-family:var(--font-family);
+                border:1.5px solid var(--border-color);background:none;color:var(--text-primary);transition:border-color .15s; }
+            .aw-choice.on { border-color:var(--accent-color);background:var(--accent-color);color:#fff;font-weight:700; }
+            .aw-input { width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid var(--border-color);border-radius:10px;
+                background:var(--secondary-bg);color:var(--text-primary);font-size:13px;font-family:var(--font-family);outline:none; }
+            .aw-input:focus { border-color:var(--accent-color); }
+            .aw-btn { width:100%;padding:13px;border:none;border-radius:14px;background:var(--accent-color);color:#fff;
+                font-size:14px;font-weight:700;cursor:pointer;font-family:var(--font-family); }
+            .aw-del-btn { width:100%;padding:13px;border:1.5px solid var(--border-color);border-radius:14px;background:none;
+                color:var(--text-primary);font-size:14px;font-weight:700;cursor:pointer;font-family:var(--font-family); }
+            .aw-back { background:var(--primary-bg);border:none;width:32px;height:32px;border-radius:50%;cursor:pointer;
+                display:flex;align-items:center;justify-content:center;color:var(--text-secondary);font-size:16px; }
+        </style>
+        <div style="background:var(--secondary-bg);border-radius:24px 24px 0 0;width:100%;max-width:500px;padding:0 0 env(safe-area-inset-bottom,0);box-shadow:0 -10px 60px rgba(0,0,0,.3);animation:slideUpSheet 0.3s cubic-bezier(0.34,1.56,0.64,1);max-height:92vh;display:flex;flex-direction:column;">
+            <div style="width:36px;height:4px;border-radius:2px;background:var(--border-color);margin:12px auto 0;flex-shrink:0;"></div>
+            <div style="padding:14px 22px 6px;display:flex;align-items:center;gap:10px;flex-shrink:0;">
+                <button class="aw-back" id="aw-back" style="visibility:hidden;">‹</button>
+                <div id="aw-dots" style="flex:1;text-align:center;font-size:11px;letter-spacing:4px;color:var(--accent-color);">● ○ ○ ○</div>
+                <button class="aw-back" id="aw-close">${ICONS.close}</button>
+            </div>
+            <div id="aw-body" style="overflow-y:auto;padding:10px 22px 6px;flex:1;"></div>
+            <div id="aw-foot" style="padding:10px 22px 22px;flex-shrink:0;"></div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const close = () => overlay.remove();
+    overlay.querySelector('#aw-close').onclick = close;
+
+    function dots() {
+        const arr = ['○', '○', '○', '○'];
+        arr[step - 1] = '●';
+        overlay.querySelector('#aw-dots').textContent = arr.join(' ');
+    }
+
+    function render() {
+        const body = overlay.querySelector('#aw-body');
+        const foot = overlay.querySelector('#aw-foot');
+        const back = overlay.querySelector('#aw-back');
+        back.style.visibility = step > 1 ? 'visible' : 'hidden';
+        dots();
+        foot.innerHTML = '';
+
+        if (step === 1) {
+            body.innerHTML = `
+                <div style="font-size:16px;font-weight:700;color:var(--text-primary);margin-bottom:14px;">${W.t1}</div>
+                <div style="display:flex;gap:10px;">
+                    <button class="aw-choice ${dir === 'him' ? 'on' : ''}" data-d="him">${W.opts1[0]}</button>
+                    <button class="aw-choice ${dir === 'me' ? 'on' : ''}" data-d="me">${W.opts1[1]}</button>
+                </div>`;
+            body.querySelectorAll('.aw-choice').forEach(b => {
+                b.onclick = () => { dir = b.dataset.d; step = 2; render(); };
+            });
+        } else if (step === 2) {
+            body.innerHTML = `
+                <div style="font-size:16px;font-weight:700;color:var(--text-primary);margin-bottom:14px;">${W.t2}</div>
+                <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px;">${W.nameHint}</div>
+                <input class="aw-input" id="aw-name" maxlength="10" value="${name.replace(/"/g, '&quot;')}">
+                <div style="font-size:11px;color:var(--text-secondary);margin:12px 0 4px;">${W.emojiHint}</div>
+                <input class="aw-input" id="aw-emoji" maxlength="4" value="${emoji.replace(/"/g, '&quot;')}" style="width:88px;text-align:center;font-size:16px;">`;
+            foot.innerHTML = `<button class="aw-btn" id="aw-next2">${W.btn2}</button>`;
+            overlay.querySelector('#aw-next2').onclick = () => {
+                name = overlay.querySelector('#aw-name').value.trim() || main.slice(0, 6);
+                emoji = overlay.querySelector('#aw-emoji').value.trim();
+                step = 3; render();
+            };
+        } else if (step === 3) {
+            const autoLabel = dir === 'him' ? '他做' : '你做';
+            const otherLabel = dir === 'him' ? '你做' : '他做';
+            body.innerHTML = `
+                <div style="font-size:16px;font-weight:700;color:var(--text-primary);margin-bottom:14px;">${W.t3}</div>
+                <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px;">${autoLabel} · ${W.autoHint}</div>
+                <textarea class="aw-input" id="aw-auto" rows="2" style="resize:vertical;">${autoText.replace(/</g, '&lt;')}</textarea>
+                <div style="font-size:11px;color:var(--text-secondary);margin:12px 0 4px;">${otherLabel}</div>
+                <textarea class="aw-input" id="aw-other" rows="2" style="resize:vertical;">${otherText.replace(/</g, '&lt;')}</textarea>`;
+            foot.innerHTML = `<button class="aw-btn" id="aw-next3">${W.btn3}</button>`;
+            overlay.querySelector('#aw-next3').onclick = () => {
+                autoText = overlay.querySelector('#aw-auto').value.trim();
+                otherText = overlay.querySelector('#aw-other').value.trim();
+                step = 4; render();
+            };
+        } else {
+            body.innerHTML = `
+                <div style="font-size:16px;font-weight:700;color:var(--text-primary);margin-bottom:14px;">${W.t4}</div>
+                <div style="display:flex;gap:10px;">
+                    <button class="aw-choice" data-c="keep">${W.opts4[0]}</button>
+                    <button class="aw-choice" data-c="del">${W.opts4[1]}</button>
+                </div>
+                <div id="aw-del-confirm" style="margin-top:12px;"></div>`;
+            body.querySelectorAll('.aw-choice').forEach(b => {
+                b.onclick = () => {
+                    if (b.dataset.c === 'keep') { finish(false); return; }   // 保留 → 直接完成
+                    step4Choice = 'del';
+                    const box = body.querySelector('#aw-del-confirm');
+                    box.innerHTML = `<button class="aw-btn" id="aw-confirm-del" style="background:#A32D2D;">${W.btnDel}</button>`;
+                    box.querySelector('#aw-confirm-del').onclick = () => finish(true);
+                };
+            });
+        }
+    }
+
+    function finish(doDelete) {
+        const him = dir === 'him' ? [autoText] : (otherText ? [otherText] : []);
+        const me  = dir === 'me'  ? [autoText] : (otherText ? [otherText] : []);
+        if (!him.length && !me.length) {
+            if (typeof showNotification === 'function') showNotification('至少要有一句文案', 'warning');
+            return;
+        }
+        if (!(window._actionBankAppend && window._actionBankAppend({ n: name, e: emoji, him: him, me: me }))) {
+            if (typeof showNotification === 'function') showNotification('动作库没加载好，转存失败', 'warning');
+            return;
+        }
+        _markCardConverted(item);
+        if (doDelete) {
+            /* 跟 deleteItem 同一套，但不弹二次 confirm——上面已经过了「确认删除？」键 */
+            const ctx = _getGroupCtx();
+            if (currentMajorTab === 'reply' && currentSubTab === 'custom') customReplies.splice(index, 1);
+            if (ctx.groups) ctx.groups.forEach(g => { if (g.items) g.items = g.items.filter(t => t !== item); });
+            throttledSaveData();
+        }
+        close();
+        if (typeof showNotification === 'function') showNotification('✓ ' + W.done, 'success', 3000);
+        renderReplyLibrary();
+    }
+
+    overlay.querySelector('#aw-back').onclick = () => {
+        if (step === 2) { name = overlay.querySelector('#aw-name') ? overlay.querySelector('#aw-name').value.trim() || name : name;
+            emoji = overlay.querySelector('#aw-emoji') ? overlay.querySelector('#aw-emoji').value.trim() : emoji; }
+        if (step === 3) { autoText = overlay.querySelector('#aw-auto') ? overlay.querySelector('#aw-auto').value.trim() : autoText;
+            otherText = overlay.querySelector('#aw-other') ? overlay.querySelector('#aw-other').value.trim() : otherText; }
+        if (step > 1) { step--; render(); }
+    };
+
+    render();
 }
 
 function _renderAtmosphereList(list, items) {

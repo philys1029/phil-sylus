@@ -29,6 +29,13 @@
         return 'sync/index.json';
     }
 
+    // 动作卡片的专属云端文件（2026-11-17 雨霏定：单独通道，只装动作，
+    // 不碰整体 text-data.json；整体同步里 actionActs 照旧保留，两条路并存）
+    function _actionObjectKey() {
+        var sid = (typeof SESSION_ID !== 'undefined' && SESSION_ID) ? SESSION_ID : 'default';
+        return 'sync/' + sid + '/action-acts.json';
+    }
+
     // 从 payload 中提取梦角名字（partnerName）用于展示
     function _extractPartnerName(payload) {
         try {
@@ -969,6 +976,29 @@
         _state.ready = true;
     }
 
+    // ==== 动作卡片专属通道（action-bank.js 的「推送云端 / 从云端拉取」用） ====
+    // 推送：把传入的动作数组整体覆盖到云端专属文件。不弹确认，由调用方负责。
+    async function pushActionActs(acts) {
+        if (!Array.isArray(acts)) throw new Error('动作数据格式错误');
+        var sid = (typeof SESSION_ID !== 'undefined' && SESSION_ID) ? SESSION_ID : 'default';
+        var payload = {
+            version: 1,
+            savedAt: new Date().toISOString(),
+            sessionId: sid,
+            actionActs: acts
+        };
+        await _uploadToOSS(JSON.stringify(payload), _actionObjectKey());
+        return true;
+    }
+
+    // 拉取：读云端专属文件，返回动作数组；云端还没有 → null
+    async function pullActionActs() {
+        var payload = await _downloadFromOSS(_actionObjectKey());
+        if (!payload) return null;
+        var acts = payload.actionActs;
+        return Array.isArray(acts) ? acts : null;
+    }
+
     global.CloudSyncEngine = {
         requestSync: requestSync,
         requestSyncNow: requestSyncNow,
@@ -976,7 +1006,9 @@
         restoreSession: restoreSession,
         cancelRestorePrompt: cancelRestorePrompt,
         getSyncStatus: getSyncStatus,
-        onSyncStatusChange: onSyncStatusChange
+        onSyncStatusChange: onSyncStatusChange,
+        pushActionActs: pushActionActs,
+        pullActionActs: pullActionActs
     };
 
     if (document.readyState === 'loading') {

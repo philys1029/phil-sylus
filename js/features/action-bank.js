@@ -115,6 +115,13 @@
                     '<button id="ab-add" style="padding:9px 14px;border:1.5px solid var(--border-color);border-radius:11px;background:none;color:var(--text-primary);font-size:12px;cursor:pointer;font-family:inherit;">＋ 添加动作</button>' +
                     '<button id="ab-save" style="padding:9px 18px;border:none;border-radius:11px;background:var(--accent-color);color:#fff;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>' +
                 '</div>' +
+            '</div>' +
+            /* 2026-11-17 雨霏定：单独导出/导入动作卡片 + 动作专属云同步（独立通道） */
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:-6px 0 14px;">' +
+                '<button id="ab-export" style="padding:8px 13px;border:1.5px solid var(--border-color);border-radius:11px;background:none;color:var(--text-secondary);font-size:12px;cursor:pointer;font-family:inherit;">导出动作</button>' +
+                '<button id="ab-import" style="padding:8px 13px;border:1.5px solid var(--border-color);border-radius:11px;background:none;color:var(--text-secondary);font-size:12px;cursor:pointer;font-family:inherit;">导入动作</button>' +
+                '<button id="ab-cloud-push" style="padding:8px 13px;border:1.5px solid var(--border-color);border-radius:11px;background:none;color:var(--text-secondary);font-size:12px;cursor:pointer;font-family:inherit;">推送云端</button>' +
+                '<button id="ab-cloud-pull" style="padding:8px 13px;border:1.5px solid var(--border-color);border-radius:11px;background:none;color:var(--text-secondary);font-size:12px;cursor:pointer;font-family:inherit;">从云端拉取</button>' +
             '</div>';
 
         var rows = '';
@@ -162,8 +169,10 @@
                     if (typeof showNotification === 'function') showNotification('第 ' + (j + 1) + ' 个动作还没有名字', 'warning');
                     return null;
                 }
-                if (!him.length || !me.length) {
-                    if (typeof showNotification === 'function') showNotification('第 ' + (j + 1) + ' 个动作（' + n + '）他做/你做至少各要一句', 'warning');
+                /* 2026-11-17 雨霏定：允许只写一侧（字卡转录的动作另一侧可留空），
+                   两侧都空才算无效——跟 actions.js applyCustomActs 的口径一致 */
+                if (!him.length && !me.length) {
+                    if (typeof showNotification === 'function') showNotification('第 ' + (j + 1) + ' 个动作（' + n + '）至少要有一句文案', 'warning');
                     return null;
                 }
                 arr.push({ n: n, e: e, him: him, me: me });
@@ -233,6 +242,159 @@
             commit(def, '✓ 已恢复默认 32 句');
             _clear().catch(function () {});
             _renderBankTab(list);
+        });
+
+        /* ═══ 2026-11-17 雨霏定：单独导出/导入动作卡片 + 动作专属云同步 ═══
+           弹窗复用字卡导入的 _showIOSheet（reply-library.js），导入方式
+           单选文字原样：「追加」/「覆盖」，默认追加。追加按动作名字去重，
+           重名的保留现有、只加新的；覆盖 = 整表替换。 */
+
+        function _normAct(x) {
+            return { n: x.n, e: x.e || '', him: (x.him || []).slice(), me: (x.me || []).slice() };
+        }
+
+        /* 追加合并：按名字判断，重名保留现有；返回 {list, added} */
+        function _mergeActs(cur, incoming) {
+            var seen = {};
+            for (var i = 0; i < cur.length; i++) seen[cur[i].n] = true;
+            var added = 0;
+            for (var j = 0; j < incoming.length; j++) {
+                if (!incoming[j] || !incoming[j].n || seen[incoming[j].n]) continue;
+                cur.push(_normAct(incoming[j]));
+                seen[incoming[j].n] = true;
+                added++;
+            }
+            return { list: cur, added: added };
+        }
+
+        /* 导入弹窗：导入文件 / 云端拉取共用。文字跟字卡导入界面一致。 */
+        function _showActsImportSheet(incoming) {
+            if (typeof _showIOSheet !== 'function') {
+                if (typeof showNotification === 'function') showNotification('导入界面组件没加载好，刷新页面再试', 'error');
+                return;
+            }
+            var modules = [{
+                id: '_ab_mod_acts',
+                icon: (typeof ICONS !== 'undefined' && ICONS.magic) ? ICONS.magic : '💗',
+                label: '动作卡片',
+                data: incoming
+            }];
+            _showIOSheet('导入动作卡片', '文件中包含 ' + incoming.length + ' 个动作', modules,
+                (typeof ICONS !== 'undefined' && ICONS.import) ? ICONS.import : '📥',
+                function (selected, mode) {
+                    var overwrite = mode === 'overwrite';
+                    var cur = collect();          /* 跟添加/删除同一套：未保存的编辑不丢 */
+                    if (!cur) return;
+                    var next, note;
+                    if (overwrite) {
+                        next = incoming.filter(function (x) { return x && x.n; }).map(_normAct);
+                        note = '覆盖';
+                    } else {
+                        var r = _mergeActs(cur, incoming);
+                        next = r.list;
+                        note = '追加' + (r.added > 0 ? '，新增 ' + r.added + ' 个' : '，没有新动作（全部重名）');
+                    }
+                    if (!window.Actions || !window.Actions.applyCustomActs(next)) {
+                        if (typeof showNotification === 'function') showNotification('动作库没加载好，导入失败', 'warning');
+                        return;
+                    }
+                    _save(next).then(function () {
+                        if (typeof showNotification === 'function') showNotification('✓ 导入成功（' + note + '）', 'success', 3000);
+                    }).catch(function () {
+                        if (typeof showNotification === 'function') showNotification('已生效，但本地保存失败', 'warning');
+                    });
+                    _renderBankTab(list);
+                }, true);
+        }
+
+        /* 导出：下载 动作卡片-日期.json */
+        list.querySelector('#ab-export').addEventListener('click', function () {
+            var arr = collect();
+            if (!arr) return;
+            var payload = { version: 1, exportedAt: new Date().toISOString(), actionActs: arr };
+            var blob = new Blob(['\uFEFF' + JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            var d = new Date();
+            var stamp = d.getFullYear() + ('0' + (d.getMonth() + 1)).slice(-2) + ('0' + d.getDate()).slice(-2);
+            a.href = url;
+            a.download = '动作卡片-' + stamp + '.json';
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+            if (typeof showNotification === 'function') showNotification('✓ 已导出 ' + arr.length + ' 个动作', 'success', 3000);
+        });
+
+        /* 导入：选 JSON 文件 → 弹「追加/覆盖」 */
+        list.querySelector('#ab-import').addEventListener('click', function () {
+            var inp = document.createElement('input');
+            inp.type = 'file';
+            inp.accept = '.json,application/json';
+            inp.onchange = function () {
+                var f = inp.files && inp.files[0];
+                if (!f) return;
+                var fr = new FileReader();
+                fr.onload = function () {
+                    try {
+                        var data = JSON.parse(String(fr.result).replace(/^\uFEFF/, ''));
+                        var inc = Array.isArray(data) ? data : data.actionActs;
+                        if (!Array.isArray(inc) || !inc.length) {
+                            if (typeof showNotification === 'function') showNotification('文件里没有动作数据', 'error');
+                            return;
+                        }
+                        _showActsImportSheet(inc);
+                    } catch (e) {
+                        if (typeof showNotification === 'function') showNotification('文件解析失败：' + e.message, 'error');
+                    }
+                };
+                fr.readAsText(f);
+            };
+            inp.click();
+        });
+
+        /* 云端连接前置检查（提示文案指向 数据与同步 面板） */
+        function _cloudReady() {
+            if (!(window.CloudSyncEngine && typeof window.CloudSyncEngine.pushActionActs === 'function')) {
+                if (typeof showNotification === 'function') showNotification('云同步模块没加载好，刷新页面再试', 'error');
+                return false;
+            }
+            if (!(window.CloudSync && window.CloudSync.isConnected())) {
+                if (typeof showNotification === 'function') showNotification('还没连接云端，先到「数据与同步」里连接', 'warning', 4000);
+                return false;
+            }
+            return true;
+        }
+
+        /* 推送云端：当前动作整体覆盖到云端专属文件（sync/<梦角>/action-acts.json） */
+        list.querySelector('#ab-cloud-push').addEventListener('click', function () {
+            if (!_cloudReady()) return;
+            var arr = collect();
+            if (!arr) return;
+            var btn = this;
+            btn.disabled = true;
+            window.CloudSyncEngine.pushActionActs(arr).then(function () {
+                if (typeof showNotification === 'function') showNotification('✓ 已推送到云端（' + arr.length + ' 个动作）', 'success', 3000);
+            }).catch(function (e) {
+                if (typeof showNotification === 'function') showNotification('推送失败：' + (e && e.message ? e.message : '未知错误'), 'error', 4000);
+            }).finally(function () { btn.disabled = false; });
+        });
+
+        /* 从云端拉取：读专属文件 → 弹「追加/覆盖」 */
+        list.querySelector('#ab-cloud-pull').addEventListener('click', function () {
+            if (!_cloudReady()) return;
+            var btn = this;
+            btn.disabled = true;
+            window.CloudSyncEngine.pullActionActs().then(function (inc) {
+                if (!inc || !inc.length) {
+                    if (typeof showNotification === 'function') showNotification('云端还没有动作数据，先在另一台设备上推送一次', 'warning', 4000);
+                    return;
+                }
+                _showActsImportSheet(inc);
+            }).catch(function (e) {
+                if (typeof showNotification === 'function') showNotification('拉取失败：' + (e && e.message ? e.message : '未知错误'), 'error', 4000);
+            }).finally(function () { btn.disabled = false; });
         });
     }
 
