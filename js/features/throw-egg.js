@@ -414,6 +414,11 @@
     if (merge) return false;
     if (typeof window._addCallEvent !== 'function') return false;
     window._addCallEvent(item.callIcon, labelFor(sender, item), null);
+    // 主动发送计数（他 10 条）：只有"他扔的"且真新起了一条才算 1 条（你扔的不计，合并的也不重复计）
+    if (sender === 'partner' && typeof window._asBeat === 'function') { try { window._asBeat(); } catch (e) {} }
+    // "你回来"计数（你 5 条）：对称地，"你扔的"且真新起一条算 1 条。走到这里已经排除了 merge，
+    // 所以不会被"连扔合并"重复计。内部按【由他决定】门控。
+    if (sender === 'user' && typeof window._asUserBeat === 'function') { try { window._asUserBeat(); } catch (e) {} }
     const list2 = getMessages();
     lastThrow = { sender: sender, itemId: item.id, session: panelSession, msg: list2[list2.length - 1] };
     return true;

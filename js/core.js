@@ -263,6 +263,7 @@ function loadMoreFuture() {
                 partnerAvatarShape: 'circle',
 autoSendEnabled: false,
 autoSendInterval: 5,
+autoSendHeDecides: false,
         allowReadNoReply: false, 
         readNoReplyChance: 0.2,
         combineReplyCards: false,
@@ -1048,17 +1049,149 @@ if (customIntros && customIntros.length > 0) {
             });
         }
 
+/* ════════════════════════════════════════════════════════════════════
+   主动发送 · 由他决定（想念 4 档）
+   - 档位（分钟，均权 25%）：① 1~10 ② 10~30 ③ 30~120 ④ 120~180
+   - 计数口径：只在"定时器触发的主动轮"里，他主动发出的每一条消息 +1
+     （字卡/表情包/emoji/拍一拍/红包/动作卡/清场/搞怪/表情反应各算 1 条）；
+     你手动发消息触发的回复不计数。累计 10 条 = 一档用满 → 重掷新档。
+   - 换档与抽间隔：抽档在开关开启那一刻 + 每满 10 条；间隔在每轮发完后
+     用当前档范围重抽一次，写回滑轨（轴会动）。拖轴 → 开关自动关（在 listeners.js）。
+   - 刷新页面即从头计（不持久化）。
+   ════════════════════════════════════════════════════════════════════ */
+const AS_TIERS = [
+    [1, 10],     // ① 1~10 分钟
+    [10, 30],    // ② 10~30 分钟
+    [30, 120],   // ③ 30 分钟~2 小时
+    [120, 180]   // ④ 2~3 小时
+];
+const AS_TIER_LEN = 10;                 // 一档管多少条他主动消息
+let asTier = -1;                        // 当前档 index；-1=还没抽过
+let asCount = 0;                        // 本档已累计条数
+let asProactive = false;                // 当前是否处于"主动轮"（定时器触发的那一轮）
+let asRoundTail = null;                 // 一轮收尾的兜底定时器
+const AS_ROUND_TAIL_MS = 26000;         // 一轮最长：3 条 × replyDelayMax 7s + 表情/红包/动作余量
+// ── "你回来"打断窗口（2026-11-18 加，只在【由他决定】开着时生效）──
+// 你发消息 → 作废正在倒计时的闹钟、开始数你发了几条；你停下来安静满 5 分钟 → 结算：
+// 你发 >5 条＝真的回来 → 档位重抽 + 想念累积清零；≤5 条＝回来一下下 → 都不动。然后重新排下一轮。
+let asUserCount = 0;                    // 这段"回来"里你发了几条（口径对称他主动发的 10 条）
+let asQuietTimer = null;                // 安静 5 分钟计时器（你每发一条就重置）
+let asInteracting = false;              // 你是否正处在这段"回来"的窗口里
+const AS_QUIET_MS = 5 * 60 * 1000;      // 停下后安静多久才重新启动（固定 5 分钟，不抽）
+const AS_REPLY_THRESHOLD = 5;           // 你发超过这个条数才算"真的回来"（清零重来）
+
+function asPickTier() { asTier = Math.floor(Math.random() * AS_TIERS.length); asCount = 0; }
+function asPickMinutes() {
+    if (asTier < 0) asPickTier();
+    const range = AS_TIERS[asTier];
+    // 档内整分钟等概率；含两端
+    return range[0] + Math.floor(Math.random() * (range[1] - range[0] + 1));
+}
+function asPaintSlider(minutes) {
+    const slider = document.getElementById('auto-send-slider');
+    const label = document.getElementById('auto-send-value');
+    if (slider) slider.value = minutes;
+    if (label) label.textContent = minutes + '分钟';
+}
+
+/** 他主动发出一条消息时调用（各出口自己判断"是他发的"）。只在主动轮里计数。 */
+window._asBeat = function () {
+    if (!settings.autoSendHeDecides || !asProactive) return;
+    asCount++;
+    if (asCount >= AS_TIER_LEN) asPickTier();   // 满 10 条：重掷档 + 计数归零
+};
+
+/** 一轮开始：置"主动轮"标记，让这一轮异步发出的消息都能被 _asBeat 数到。 */
+function asBeginRound() {
+    asProactive = true;
+    if (asRoundTail) clearTimeout(asRoundTail);
+    asRoundTail = setTimeout(function () {
+        asProactive = false;
+        asRoundTail = null;
+        // 这一轮已发完（消息全部发出、计数完成、档可能已换）→ 用当前档抽下一轮间隔并排定
+        if (settings.autoSendEnabled && settings.autoSendHeDecides) asArmNext();
+    }, AS_ROUND_TAIL_MS);
+}
+
+/** 抽下一轮间隔（当前档范围）→ 写回滑轨（轴会动）→ 定时到点触发一轮。整条链用一次性 setTimeout。 */
+function asArmNext() {
+    if (!settings.autoSendEnabled || !settings.autoSendHeDecides) return;
+    if (autoSendTimer) { clearTimeout(autoSendTimer); clearInterval(autoSendTimer); autoSendTimer = null; }
+    const mins = asPickMinutes();
+    settings.autoSendInterval = mins;
+    asPaintSlider(mins);
+    throttledSaveData();
+    autoSendTimer = setTimeout(function () {
+        if (!document.body.classList.contains('batch-favorite-mode')) {
+            asBeginRound();
+            simulateReply();
+            // 下一轮由 asBeginRound 的尾定时器排（那时消息发完、档已可能更新）
+        } else {
+            asArmNext();  // 收藏模式这一轮跳过，没有 beginRound，自己接着排
+        }
+    }, mins * 60 * 1000);
+}
+
+/** 你发出一条消息时调用（文本/表情包/emoji/信/红包走 addMessage 统一口；拍一拍/搞怪/动作/表情反应各旁路自己调）。
+    作用：作废正在倒计时的"他下次找你"闹钟；把这段"你回来"的计数 +1；安静计时从头数 5 分钟。
+    只在【由他决定】开着时生效——固定间隔模式完全不碰。 */
+window._asUserBeat = function () {
+    if (!settings.autoSendEnabled || !settings.autoSendHeDecides) return;
+    asInteracting = true;
+    asUserCount++;
+    // Q3：你一回消息，那条已经排好、还在倒计时的主动消息作废
+    if (autoSendTimer) { clearTimeout(autoSendTimer); clearInterval(autoSendTimer); autoSendTimer = null; }
+    if (asRoundTail) { clearTimeout(asRoundTail); asRoundTail = null; }
+    asProactive = false;
+    // 你每发一条，安静窗口从这一刻重新数 5 分钟
+    if (asQuietTimer) clearTimeout(asQuietTimer);
+    asQuietTimer = setTimeout(asQuietDone, AS_QUIET_MS);
+};
+
+/** 安静满 5 分钟：判定这段"你回来"发了多少条 → 决定想念档位 → 重新排下一轮。 */
+function asQuietDone() {
+    asQuietTimer = null;
+    if (!settings.autoSendEnabled || !settings.autoSendHeDecides) {
+        asInteracting = false; asUserCount = 0; return;
+    }
+    if (asUserCount > AS_REPLY_THRESHOLD) {
+        // 真的回来了：档位重抽 + 想念累积清零（跟他从头想一样），下一轮按新档抽间隔
+        asPickTier();
+    }
+    // ≤5 条（回来一下下）：档位和想念累积都不动，接着走
+    asUserCount = 0;
+    asInteracting = false;
+    asArmNext();
+}
+
+/** 关掉【由他决定】/拖轴/关总开关时，把这段"回来"的窗口一起清掉，别留个孤儿计时器。
+    manageAutoSendTimer 重建定时器前调用即可，不必在 listeners 单独暴露。 */
+function asResetUserWindow() {
+    if (asQuietTimer) { clearTimeout(asQuietTimer); asQuietTimer = null; }
+    asInteracting = false;
+    asUserCount = 0;
+    asProactive = false;
+}
+
 function manageAutoSendTimer() {
     if (autoSendTimer) {
         clearInterval(autoSendTimer);
+        clearTimeout(autoSendTimer);
         autoSendTimer = null;
     }
-    if (settings.autoSendEnabled) {
+    if (asRoundTail) { clearTimeout(asRoundTail); asRoundTail = null; }
+    asResetUserWindow();
+
+    if (!settings.autoSendEnabled) return;
+
+    if (settings.autoSendHeDecides) {
+        asPickTier();   // 开关开启那一刻抽第一档
+        asArmNext();    // 抽第一次间隔、写回滑轨、排第一轮
+    } else {
         const intervalMs = settings.autoSendInterval * 60 * 1000;
-        
         autoSendTimer = setInterval(() => {
             if (!document.body.classList.contains('batch-favorite-mode')) {
-                simulateReply(); 
+                simulateReply();
             }
         }, intervalMs);
     }
@@ -1991,6 +2124,9 @@ window.openReactionPicker = function(messageId, anchorEl) {
         // 撤回表情（再点同一个）不算；梦角自动给的表情不走这里，所以也不会触发。
         const reacted = messages.find(m => m.id === messageId);
         if (reacted && reacted.reaction && typeof window._triggerDelayedReply === 'function') {
+            // "你回来"计数：你手动加一个表情反应＝一次主动举动，对称他 10 条里的表情反应算 1 条。
+            // 撤回反应（reaction 变 null）走不到这个 if，不重复计。内部按【由他决定】门控。
+            if (typeof window._asUserBeat === 'function') { try { window._asUserBeat(); } catch (e) {} }
             // 如果点的是用户自己发的消息，也记进"这一轮"候选池，跟发消息时的处理一致
             if (reacted.sender === 'user') {
                 window._currentRoundMsgIds = window._currentRoundMsgIds || [];
@@ -2084,6 +2220,19 @@ const addMessage = (message) => {
     // 追没追上底部，要在"往数组里塞新消息、改动滚动高度"之前就先判断好，不然滚动高度已经变了，判断就不准了
     const wasCaughtUp = _isCaughtUpToLatest();
     messages.push(message);
+
+    // 主动发送计数：他主动发出的字卡/表情包/emoji/红包都带 partnerName 这个 sender。
+    // _asBeat 内部只在"定时器主动轮"里才计数，所以你手动聊天触发的回复（sender 相同）不会被算进去。
+    // 拍一拍/搞怪/动作卡/表情反应不走这个通道，各在自己的出口单独调 _asBeat。
+    if (message.sender && message.sender === (settings.partnerName || '对方') && typeof window._asBeat === 'function') {
+        try { window._asBeat(); } catch (e) {}
+    }
+    // "你回来"计数：你发的文本/表情包/emoji/信/红包/批量都带 sender='user'，走这个统一口。
+    // _asUserBeat 内部按【由他决定】门控，固定间隔模式不会进来。
+    // 拍一拍/搞怪/动作/表情反应不走这个口，各在自己的出口单独调（见下文）。
+    if (message.sender === 'user' && typeof window._asUserBeat === 'function') {
+        try { window._asUserBeat(); } catch (e) {}
+    }
 
     // 动作系统附加 B（已定清单 §2:36）：展开层 / 就地条开着时，他在外面发消息 → 卡片震一下
     // （2026-11-08 修：原来判 message.sender==='partner'，但站内他发消息 sender 一律是 partnerName，
@@ -2388,6 +2537,8 @@ const addMessage = (message) => {
 
             const _pokeMsgId = Date.now();
             addMessage({ id: _pokeMsgId, text: pokeText, timestamp: new Date(), type: 'system' });
+            // 他主动拍一拍：这条是 system 消息、没有 partnerName sender，addMessage 入口数不到，单独 +1
+            if (typeof window._asBeat === 'function') { try { window._asBeat(); } catch (e) {} }
             if (typeof playSound === 'function') playSound('partner_poke');
             // 不在主聊天页（后台/弹窗/情侣空间……）时提示一下：后台弹系统通知，应用内弹横条
             if (typeof window._notifyPartnerEvent === 'function') window._notifyPartnerEvent('拍了拍你', _pokeMsgId);
@@ -2855,6 +3006,8 @@ if (partnerPersonas && partnerPersonas.length > 0 && Math.random() < 0.3) {
                     if (targetMsg && typeof window.addReactionToMessage === 'function') {
                         const emoji = customEmojis[Math.floor(Math.random() * customEmojis.length)];
                         window.addReactionToMessage(targetId, emoji);
+                        // 梦角自动给表情反应：不进消息流（只挂 badge），单独 +1 计入主动轮
+                        if (typeof window._asBeat === 'function') { try { window._asBeat(); } catch (e) {} }
                         // 不在主聊天页时提示：后台弹系统通知，应用内弹横条，点一下跳到被加表情的那条消息
                         if (typeof window._notifyPartnerEvent === 'function') {
                             window._notifyPartnerEvent('回应了你的消息 ' + emoji, targetId);

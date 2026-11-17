@@ -561,6 +561,9 @@ function showPokeTab() {
                 timestamp: new Date(), 
                 type: 'system'
             });
+            // "你回来"计数：你拍一拍是 type:'system' 无 sender，不走 addMessage 的统一口，单独挂。
+            // 对称他 10 条里的拍一拍算 1 条；内部按【由他决定】门控。
+            if (typeof window._asUserBeat === 'function') { try { window._asUserBeat(); } catch (e) {} }
             document.getElementById('user-sticker-picker').classList.remove('active');
             const delayRange = settings.replyDelayMax - settings.replyDelayMin;
             const randomDelay = settings.replyDelayMin + Math.random() * delayRange;

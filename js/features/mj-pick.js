@@ -47,7 +47,14 @@
      */
 
     var WILL = {
-        kind: { card: 18, poke: 1, both: 1 },   // 90% 纯字卡 / 5% 只拍一拍 / 5% 两者都要
+        /* 2026-11-17 雨霏定：归属改成三张独立的「是/否」转盘，每张卡各转一遍，
+           哪几个转到「是」就进哪几个库（可叠加，不预先列组合）。
+           动作那张盘的力度 p 每轮抽一次（5%~20%，存在 S.actionPct），整轮共用。 */
+        disk: {
+            card: { yes: 90, no: 10 },           // 字卡盘：90% 进回复库
+            poke: { yes: 5,  no: 95 }            // 拍一拍盘：5% 进拍一拍库
+        },
+        kind: { card: 18, poke: 1, both: 1 },   // 旧表保留（历史数据/别处仍读），新挑卡不再用它定归属
         argue: { ok: 1, insist: 1 },            // 你拒绝他时，他争不争
         undo: { allow: 19, deny: 1 },           // 你反悔时，他允不允许（5% 驳回）
         more: { no: 19, yes: 1 }                // 这一轮完了，他还有没有想选的
@@ -442,7 +449,8 @@
         detail: -1,          // 历史里展开的那条
         pendingDel: -1,      // 点了删除、等第二次确认的那条
         committing: false,   // 入库防重入
-        window: null         // 本次思考的区间 {lo, hi}，仅内存
+        window: null,        // 本次思考的区间 {lo, hi}，仅内存
+        actionPct: 12        // 2026-11-17：本轮动作盘力度 p（5~20），beginThinking 抽、整轮共用
     };
 
     /* ══════════════════════ 7 业务 ══════════════════════
@@ -456,15 +464,22 @@
 
     /**
      * 造一张卡。id 只要在本轮会话里唯一，不写进存储。
+     * 2026-11-17：三张是/否盘的最终结果存进 wantCard/wantPoke/wantAct 三个布尔；
+     * kind 仍按旧语义（card/poke/both）算一份，供入库/历史/别处读取，保持兼容。
      * @param {string} text
-     * @param {string} kind card | poke | both
+     * @param {{card:boolean, poke:boolean, act:boolean}} want 三张盘结果，至少一个为 true
      * @returns {Object}
      */
-    function makeCard(text, kind) {
+    function makeCard(text, want) {
+        /* 旧 kind 只描述字卡/拍一拍两维；动作不进 kind，另存 wantAct */
+        var kind = want.card && want.poke ? 'both' : (want.poke ? 'poke' : 'card');
         return {
             id: 'c' + (++_seq) + '_' + drawInt(100, 999),
             text: text,
             kind: kind,
+            wantCard: !!want.card,
+            wantPoke: !!want.poke,
+            wantAct: !!want.act,
             status: 'pending',
             forced: false,
             group: '',
@@ -498,7 +513,23 @@
                 avail.splice(at, 1);
             }
 
-            if (text) cards.push(makeCard(text, roll(WILL.kind)));
+            if (text) {
+                /* 2026-11-17：三张独立是/否盘，各转一遍；三个全否就整张重转，
+                   直到至少一个「是」（她定：全否就重走，不强制塞进字卡）。 */
+                var want, guard = 0;
+                var actDisk = { yes: S.actionPct, no: 100 - S.actionPct };
+                do {
+                    want = {
+                        card: roll(WILL.disk.card) === 'yes',
+                        poke: roll(WILL.disk.poke) === 'yes',
+                        act:  roll(actDisk) === 'yes'
+                    };
+                    guard++;
+                } while (!want.card && !want.poke && !want.act && guard < 100);
+                /* guard 兜底：极端情况连转 100 次全否才强制进字卡，正常不会触发 */
+                if (!want.card && !want.poke && !want.act) want.card = true;
+                cards.push(makeCard(text, want));
+            }
         }
         return cards;
     }
@@ -556,6 +587,8 @@
     function beginThinking() {
         S.stage = 'thinking';
         S.window = thinkWindow();
+        /* 2026-11-17：他思考这一轮抽一次动作盘力度 p（5%~20%），本轮所有卡共用 */
+        S.actionPct = drawInt(5, 20);
         S.deadline = Date.now() + S.window.ms;
         render();
         startTimer();
@@ -683,10 +716,13 @@
         var libCount = 0, pokeCount = 0, forcedCount = 0;
 
         approved.forEach(function (c) {
-            var kind = c.kind || 'card';           // 老数据没有 kind，一律当纯字卡
-            var isPokeOnly = (kind === 'poke');
+            /* 2026-11-17 修：入库按三张盘的三布尔判断，不再用旧 kind 猜。
+               旧 kind 只看字卡/拍一拍两维，「只做动作」会被算成 card 误进字卡库。
+               getWant 对没有 wantCard 的老卡从 kind 反推，行为跟原来完全一样。 */
+            var want = getWant(c);
+            var kind = c.kind || 'card';           // 留作历史兼容字段
 
-            if (!isPokeOnly) {
+            if (want.card) {
                 libCount++;
                 if (replies && replies.indexOf(c.text) === -1) replies.push(c.text);
 
@@ -699,15 +735,16 @@
                 // 没选分组的就留在未分组，不凭空建一个空分组
             }
 
-            if (kind === 'poke' || kind === 'both') {
+            if (want.poke) {
                 pokeCount++;
                 if (pokes && pokes.indexOf(c.text) === -1) pokes.push(c.text);
             }
+            // want.act 那半不在这里入库，下面等向导逐张填完再写动作库
 
             S.picked.push({
                 text: c.text,
                 forced: !!c.forced,
-                poke: kind !== 'card',
+                poke: want.poke,
                 kind: kind,
                 src: 'pick',
                 ts: Date.now()
@@ -724,15 +761,31 @@
             fileName: S.fileName,
             round: S.round,
             cards: S.cards.map(function (c) {
+                var w = getWant(c);
                 return {
                     text: c.text,
                     status: c.status,
                     forced: !!c.forced,
                     kind: c.kind || 'card',
+                    wantCard: w.card, wantPoke: w.poke, wantAct: w.act,   // 历史标签认动作要用
                     group: c.group || ''
                 };
             })
         });
+
+        /* 2026-11-17：入库收尾抽成函数——有动作卡时要等向导逐张填完再收尾。 */
+        function finishCommit() {
+            S.committing = false;
+            // 入库完是终点还是「还有想选的」：保持线性——所有卡都处理完、都入库了才问他
+            if (S.moreOffer && S.round < MAX_ROUNDS) {
+                S.moreOffer = false;
+                S.cards = [];                  // 这轮已入库，下一轮从空白清单开始
+                S.stage = 'offer';
+            } else {
+                resetSession();
+            }
+            render();
+        }
 
         Promise.all([
             dbSave(K_PICKED, S.picked),
@@ -745,16 +798,15 @@
             if (forcedCount) bits.push('他坚持要 ' + forcedCount + ' 张');
             notify(bits.join(' · ') || '处理好了', 'success');
         }).then(function () {
-            S.committing = false;
-            // 入库完是终点还是「还有想选的」：保持线性——所有卡都处理完、都入库了才问他
-            if (S.moreOffer && S.round < MAX_ROUNDS) {
-                S.moreOffer = false;
-                S.cards = [];                  // 这轮已入库，下一轮从空白清单开始
-                S.stage = 'offer';
-            } else {
-                resetSession();
+            // 2026-11-17：这批里动作盘为「是」的卡，逐张过向导（只解决动作，字卡那半已在上面入库）
+            var actTexts = approved.filter(function (c) { return getWant(c).act; })
+                                   .map(function (c) { return c.text; });
+            if (actTexts.length && typeof window._showActWizardFromPick === 'function') {
+                window._showActWizardFromPick(actTexts, finishCommit);
+                // S.committing 保持 true，提交后不能直接点第二次；等向导全部结束再收尾
+                return;
             }
-            render();
+            finishCommit();
         }, function () {
             S.committing = false;
             notify('保存没写进去，再点一次试试', 'error');
@@ -1325,14 +1377,16 @@
         // 吸底：只在有通过的卡时出现
         if (approved.length) {
             var bar = _modal.querySelector('#mjp-commit-bar');
-            var toLib = approved.filter(function (c) { return (c.kind || 'card') !== 'poke'; });
+            /* 2026-11-17：按三盘结果统计。toLib=进字卡库；actN=要做成动作；
+               只进拍一拍=不进字卡但进拍一拍。动作卡也走「加入回复库」这个入口触发向导。 */
+            var toLib = approved.filter(function (c) { return getWant(c).card; });
+            var actN = approved.filter(function (c) { return getWant(c).act; }).length;
+            var pokeOnly = approved.filter(function (c) { var w = getWant(c); return !w.card && w.poke; }).length;
             var note = '已通过 ' + approved.length + ' 张';
-            if (toLib.length < approved.length) {
-                note += '（其中 ' + (approved.length - toLib.length) + ' 张只进拍一拍）';
-            }
+            if (pokeOnly) note += '（其中 ' + pokeOnly + ' 张只进拍一拍）';
             bar.innerHTML =
                 '<span style="font-size:11px;color:var(--text-secondary);">' + note + '</span>' +
-                bigBtn(toLib.length ? '加入回复库' : '录进拍一拍', 'ok', 'id="mjp-commit"');
+                bigBtn(toLib.length || actN ? '加入回复库' : '录进拍一拍', 'ok', 'id="mjp-commit"');
             bar.style.display = 'flex';
         }
     }
@@ -1376,15 +1430,36 @@
             'font-family:var(--font-family);max-width:170px;">' + opts + '</select>';
     }
 
+    /**
+     * 2026-11-17：取一张卡的三个归属布尔。新卡读 want* 字段；
+     * 老历史卡没有这些字段，就从 kind 反推，保证旧记录显示不变。
+     */
+    function getWant(c) {
+        if (c && typeof c.wantCard === 'boolean') {
+            return { card: c.wantCard, poke: c.wantPoke, act: !!c.wantAct };
+        }
+        var k = (c && c.kind) || 'card';
+        return { card: k === 'card' || k === 'both', poke: k === 'poke' || k === 'both', act: false };
+    }
+
+    /* 动作小图标：more-menu.js:89-92 定稿的心跳线+红心，等比缩小到状态行尺寸 */
+    var ACT_ICON_SM = '<svg viewBox="0 0 48 32" xmlns="http://www.w3.org/2000/svg" width="19" height="13" fill="none" style="vertical-align:-1px;">' +
+        '<path d="M3 17 H13 L17 8 L22 26 L26 17 H31" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>' +
+        '<path d="M37.5 21 C33.2 17.2 31 14.6 33.2 12.3 C34.8 10.6 37.1 11.4 37.5 13.1 C37.9 11.4 40.2 10.6 41.8 12.3 C44 14.6 41.8 17.2 37.5 21 Z" fill="#C0392B"/>' +
+        '</svg>';
+
     function cardHtml(c) {
         var kind = c.kind || 'card';
+        var want = getWant(c);
 
-        // 来源标：纯字卡不挂图标（字卡是默认形态）；♡ 是拍一拍；两者都要才同时出 ✍️ 和 ♡
+        // 来源标（雨霏 22:33 定的干净规则）：三个库各一个标，抽到哪个归属就出哪个标；
+        // 唯一例外——只属于字卡（最常见≈默认）时什么都不显示。
         var src = '';
-        if (kind === 'poke') {
-            src = '<span title="他只想放进拍一拍，不进字卡" style="font-size:12px;color:#F06595;">♡</span>';
-        } else if (kind === 'both') {
-            src = '<span title="字卡和拍一拍都要" style="font-size:12px;">✍️<span style="color:#F06595;">♡</span></span>';
+        var onlyCard = want.card && !want.poke && !want.act;
+        if (!onlyCard) {
+            if (want.card) src += '<span title="字卡" style="font-size:12px;">✍️</span>';
+            if (want.poke) src += '<span title="拍一拍" style="font-size:12px;color:#F06595;">♡</span>';
+            if (want.act) src += '<span title="他也想把这个做成动作" style="display:inline-flex;align-items:center;color:var(--text-primary);">' + ACT_ICON_SM + '</span>';
         }
 
         var stateBadge = '';
@@ -1394,9 +1469,12 @@
             if (c.forced) {
                 stateBadge = badge('他坚持要', 'solid');
                 extra = '<div style="margin-top:8px;font-size:11px;color:var(--text-secondary);">固定归入「' + INSIST + '」，不用选分组</div>';
-            } else if (kind === 'poke') {
+            } else if (!want.card && want.poke) {
                 stateBadge = badge('已通过', 'accent');
                 extra = '<div style="margin-top:8px;font-size:11px;color:var(--text-secondary);">只进拍一拍，不用选分组</div>';
+            } else if (!want.card && !want.poke && want.act) {
+                stateBadge = badge('已通过', 'accent');
+                extra = '<div style="margin-top:8px;font-size:11px;color:var(--text-secondary);">只做成动作，不用选分组</div>';
             } else {
                 stateBadge = badge('已通过', 'accent');
                 extra = '<div style="margin-top:9px;">' + groupSelect(c) + '</div>';
@@ -1467,9 +1545,14 @@
     function histChips(c) {
         var out = [];
         var kind = c.kind || 'card';
+        var want = getWant(c);   // 老历史从 kind 反推，显示跟原来一样；新卡按三布尔
 
         if (c.forced) out.push(chip('他坚持要', 'solid'));
-        else if (c.status === 'approved') out.push(chip(kind === 'poke' ? '只进拍一拍' : '已加入', kind === 'poke' ? 'pink' : 'accent'));
+        else if (c.status === 'approved') {
+            // 「只做动作」的卡没进字卡库，不能显示「已加入」
+            if (want.act && !want.card && !want.poke) out.push(chip('只做成动作', 'pink'));
+            else out.push(chip(kind === 'poke' ? '只进拍一拍' : '已加入', kind === 'poke' ? 'pink' : 'accent'));
+        }
         else if (c.status === 'rejected') out.push(chip('他让步了，不加', 'muted'));
         else if (c.status === 'arguing') out.push(chip('他不接受', 'solid'));
         else out.push(chip('没处理', 'muted'));
@@ -1478,6 +1561,9 @@
         else if (kind === 'poke') { /* 上面已经有「只进拍一拍」 */ }
         // 老数据只有 poke 布尔，没有 kind
         else if (c.poke) out.push(chip('♡ 拍一拍', 'pink'));
+
+        // 2026-11-17 补动作标：字卡库那半已由状态标签表达，这里只在动作还叠着字卡/拍一拍时补一个
+        if (want.act && (want.card || want.poke)) out.push(chip('动作', 'pink'));
 
         // 分组：已经由状态标签表达过的系统分组不再重复一遍
         if (c.group && c.group !== '未分组' && c.group !== INSIST) out.push(chip(c.group, 'group'));

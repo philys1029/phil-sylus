@@ -644,7 +644,12 @@
     }
     if (window.EmergencyOffline && window.EmergencyOffline.isOn()) return; // 熔断整套不生效
     if (document.getElementById('curtain-overlay')) return;               // 幕布内不走这套概率
-    if (Math.random() < ACTION_PROB) addAct('him', null, pickCardTarget());
+    if (Math.random() < ACTION_PROB) {
+      var _actCard = addAct('him', null, pickCardTarget());
+      // 主动发送计数：他主动发的一条动作卡算 1 条（_asBeat 内部只在定时器主动轮里计数）。
+      // 只挂在这个入口——userAct 里"你做动作→他回动作"是手动触发，不经过这里，不会被误算。
+      if (_actCard && typeof window._asBeat === 'function') { try { window._asBeat(); } catch (e) {} }
+    }
   }
 
   /* 日常主动发动作（＋菜单 picker / 展开层工具栏 / 就地条）：你做句落聊天同框卡。
@@ -659,6 +664,9 @@
   function userAct(name, opts) {
     var o = opts || {};
     var m = addAct('me', name, o.card, o.text);
+    /* "你回来"计数（你 5 条）：对称他 10 条里的动作卡算 1 条。只在 m 真落地时计；
+       内部按【由他决定】门控。绝不能挂在下面他回动作的 addAct('him') 上——那是手动触发的回应。 */
+    if (m && typeof window._asUserBeat === 'function') { try { window._asUserBeat(); } catch (e) {} }
     if (m && o.stage) {
       /* 展开层分支：100% 动作回复 + 10% 额外外面文字 */
       setTimeout(function () { addAct('him', null, o.card || m); },

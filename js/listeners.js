@@ -1579,10 +1579,12 @@ const autoSendToggle = document.getElementById('auto-send-toggle');
 const autoSendControl = document.getElementById('auto-send-control');
 const autoSendSlider = document.getElementById('auto-send-slider');
 const autoSendValue = document.getElementById('auto-send-value');
+const autoSendHeRow = document.getElementById('auto-send-he-row');
 
 const updateAutoSendUI = () => {
     autoSendToggle.classList.toggle('active', !!settings.autoSendEnabled);
     autoSendControl.style.display = settings.autoSendEnabled ? "flex" : "none";
+    if (autoSendHeRow) autoSendHeRow.classList.toggle('active', !!settings.autoSendHeDecides);
     const currentVal = settings.autoSendInterval || 5;
     autoSendSlider.value = currentVal;
     autoSendValue.textContent = `${currentVal}分钟`;
@@ -1598,13 +1600,37 @@ autoSendToggle.addEventListener('click', () => {
     showNotification(`主动发送已${settings.autoSendEnabled ? '开启' : '关闭'}`, 'success');
 });
 
+// 【由他来决定】开关：开→间隔交给 4 档想念随机；关→回到固定 setInterval
+if (autoSendHeRow) {
+    autoSendHeRow.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        settings.autoSendHeDecides = !settings.autoSendHeDecides;
+        updateAutoSendUI();
+        manageAutoSendTimer();
+        throttledSaveData();
+        showNotification(settings.autoSendHeDecides ? '间隔已交给他想念的程度决定' : '间隔改回固定', 'success');
+    });
+}
+
 autoSendSlider.value = settings.autoSendInterval || 5;
 autoSendValue.textContent = `${settings.autoSendInterval || 5}分钟`;
 
+// 她自己拖轴 → 「由他来决定」自动关掉（照挑字卡 Q2：我动了轴就听我的）
+const dropAutoSendHeDecides = () => {
+    if (!settings.autoSendHeDecides) return;
+    settings.autoSendHeDecides = false;
+    if (autoSendHeRow) autoSendHeRow.classList.remove('active');
+    throttledSaveData();
+};
+
 autoSendSlider.addEventListener('input', (e) => {
     const val = parseInt(e.target.value);
-    settings.autoSendInterval = val;
+    dropAutoSendHeDecides();
+    settings.autoSendInterval = val;      // 先写新值，再重建定时器，否则定时器拿旧间隔
     autoSendValue.textContent = `${val}分钟`;
+    manageAutoSendTimer();
+    throttledSaveData();
 });
 
 const combineCardsToggle  = document.getElementById('combine-cards-toggle');

@@ -1034,7 +1034,12 @@ function _markCardConverted(text) {
     try { localStorage.setItem('convertedActionCards', JSON.stringify([...s])); } catch (e) {}
 }
 
-function _showActWizard(item, index) {
+function _showActWizard(item, index, opts) {
+    opts = opts || {};
+    /* 2026-11-17 雨霏定：fromPick=从「他挑字卡」过来——只解决动作，三步版，
+       不删字卡、不打「已转」标记、不刷新字卡库；完成后走 opts.onDone 进下一张。
+       不传 opts 时（字卡库魔法棒入口）行为跟原来四步版完全一样，不能改坏。 */
+    const fromPick = !!opts.fromPick;
     const main = (item.split('|')[0] || item).trim() || item.trim();
     const W = {
         t1: '动作由谁发出？', opts1: ['他', '你'],
@@ -1045,6 +1050,14 @@ function _showActWizard(item, index) {
         t4: '原字卡要删除吗？', opts4: ['保留', '删除'], btnDel: '确认删除？',
         done: '动作已放进动作库'
     };
+
+    /* 2026-11-17 雨霏定：从他挑批量进向导时看不到在处理哪句，第1、2步顶部固定显示当前卡原文。
+       只在三步（fromPick）模式加；字卡库四步版界面原样不动。原文可能 1~5 行，保留换行。 */
+    const escW = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const quoteHtml = fromPick
+        ? `<div style="font-size:11px;color:var(--text-secondary);margin-bottom:6px;">当前这句</div>
+           <div style="font-size:13px;line-height:1.55;color:var(--text-primary);background:var(--primary-bg);border:1px solid var(--border-color);border-radius:10px;padding:9px 11px;margin-bottom:14px;white-space:pre-wrap;max-height:120px;overflow-y:auto;">${escW(item)}</div>`
+        : '';
 
     let step = 1;
     let dir = 'him';            // 第1步选的方向
@@ -1091,10 +1104,14 @@ function _showActWizard(item, index) {
     document.body.appendChild(overlay);
 
     const close = () => overlay.remove();
-    overlay.querySelector('#aw-close').onclick = close;
+    overlay.querySelector('#aw-close').onclick = () => {
+        close();
+        /* 他挑字卡队列里中途关掉：这张放弃，但要让队列继续，否则 commit 永远不收尾 */
+        if (fromPick && typeof opts.onDone === 'function') opts.onDone();
+    };
 
     function dots() {
-        const arr = ['○', '○', '○', '○'];
+        const arr = fromPick ? ['○', '○', '○'] : ['○', '○', '○', '○'];
         arr[step - 1] = '●';
         overlay.querySelector('#aw-dots').textContent = arr.join(' ');
     }
@@ -1108,7 +1125,7 @@ function _showActWizard(item, index) {
         foot.innerHTML = '';
 
         if (step === 1) {
-            body.innerHTML = `
+            body.innerHTML = `${quoteHtml}
                 <div style="font-size:16px;font-weight:700;color:var(--text-primary);margin-bottom:14px;">${W.t1}</div>
                 <div style="display:flex;gap:10px;">
                     <button class="aw-choice ${dir === 'him' ? 'on' : ''}" data-d="him">${W.opts1[0]}</button>
@@ -1121,7 +1138,7 @@ function _showActWizard(item, index) {
             if (picking) {
                 const acts = (window._actionBankList ? window._actionBankList() : []);
                 const escHtml = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-                body.innerHTML = `
+                body.innerHTML = `${quoteHtml}
                     <div style="font-size:16px;font-weight:700;color:var(--text-primary);margin-bottom:4px;">${W.pickTitle}</div>
                     <div style="font-size:11px;color:var(--text-secondary);margin-bottom:12px;">${W.pickSub}</div>
                     <div style="display:flex;flex-direction:column;gap:8px;">
@@ -1147,7 +1164,7 @@ function _showActWizard(item, index) {
                 });
                 return;
             }
-            body.innerHTML = `
+            body.innerHTML = `${quoteHtml}
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
                     <div style="font-size:16px;font-weight:700;color:var(--text-primary);flex:1;">${W.t2}</div>
                     <button id="aw-pick" style="font-size:11px;padding:6px 11px;border:1.5px solid var(--border-color);border-radius:9px;background:none;color:var(--text-secondary);cursor:pointer;font-family:var(--font-family);white-space:nowrap;flex-shrink:0;">${W.pickBtn}</button>
@@ -1175,10 +1192,11 @@ function _showActWizard(item, index) {
                 <textarea class="aw-input" id="aw-auto" rows="2" style="resize:vertical;">${autoText.replace(/</g, '&lt;')}</textarea>
                 <div style="font-size:11px;color:var(--text-secondary);margin:12px 0 4px;">${otherLabel}</div>
                 <textarea class="aw-input" id="aw-other" rows="2" style="resize:vertical;">${otherText.replace(/</g, '&lt;')}</textarea>`;
-            foot.innerHTML = `<button class="aw-btn" id="aw-next3">${W.btn3}</button>`;
+            foot.innerHTML = `<button class="aw-btn" id="aw-next3">${fromPick ? '完成' : W.btn3}</button>`;
             overlay.querySelector('#aw-next3').onclick = () => {
                 autoText = overlay.querySelector('#aw-auto').value.trim();
                 otherText = overlay.querySelector('#aw-other').value.trim();
+                if (fromPick) { finish(); return; }   // 三步版：填完文案直接入库，不问删不删
                 step = 4; render();
             };
         } else {
@@ -1222,18 +1240,25 @@ function _showActWizard(item, index) {
             }
             return;
         }
-        _markCardConverted(item);
-        if (doDelete) {
-            /* 跟 deleteItem 同一套，但不弹二次 confirm——上面已经过了「确认删除？」键 */
-            const ctx = _getGroupCtx();
-            if (currentMajorTab === 'reply' && currentSubTab === 'custom') customReplies.splice(index, 1);
-            if (ctx.groups) ctx.groups.forEach(g => { if (g.items) g.items = g.items.filter(t => t !== item); });
-            throttledSaveData();
+        if (!fromPick) {
+            _markCardConverted(item);
+            if (doDelete) {
+                /* 跟 deleteItem 同一套，但不弹二次 confirm——上面已经过了「确认删除？」键 */
+                const ctx = _getGroupCtx();
+                if (currentMajorTab === 'reply' && currentSubTab === 'custom') customReplies.splice(index, 1);
+                if (ctx.groups) ctx.groups.forEach(g => { if (g.items) g.items = g.items.filter(t => t !== item); });
+                throttledSaveData();
+            }
         }
         close();
         const doneMsg = toExisting ? '已加进「' + name + '」' : W.done;
         if (typeof showNotification === 'function') showNotification('✓ ' + doneMsg, 'success', 3000);
-        renderReplyLibrary();
+        if (fromPick) {
+            /* 他挑字卡过来的：字卡那半已由 mj-pick 入库，这里不碰、不刷新字卡库，只通知下一张 */
+            if (typeof opts.onDone === 'function') opts.onDone();
+        } else {
+            renderReplyLibrary();
+        }
     }
 
     overlay.querySelector('#aw-back').onclick = () => {
@@ -1248,6 +1273,27 @@ function _showActWizard(item, index) {
 
     render();
 }
+
+/* 2026-11-17 雨霏定：他挑字卡入库后，动作卡逐张过三步向导。
+   复用上面的向导（fromPick 模式：不删字卡、不刷新字卡库），全部处理完（或中途关掉）
+   再调 allDone 让 mj-pick 收尾。 */
+function _showActWizardFromPick(texts, allDone) {
+    const list = (texts || []).filter(t => t && String(t).trim()).map(String);
+    let i = 0;
+    function next() {
+        if (i >= list.length) {
+            if (typeof showNotification === 'function') showNotification('✓ 动作卡都处理好了', 'success', 2500);
+            if (typeof allDone === 'function') allDone();
+            return;
+        }
+        const t = list[i++];
+        _showActWizard(t, -1, { fromPick: true, onDone: next });
+    }
+    if (!list.length) { if (typeof allDone === 'function') allDone(); return; }
+    if (typeof showNotification === 'function') showNotification('有 ' + list.length + ' 张动作卡，逐张填一下', 'info', 2500);
+    next();
+}
+window._showActWizardFromPick = _showActWizardFromPick;
 
 function _renderAtmosphereList(list, items) {
     const disabledSet = _getDisabledItemsSet();
