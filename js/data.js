@@ -522,8 +522,58 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
+/* ===== 手表推送（Bark） =====
+ * 浏览器通知不参与 Apple Watch 的镜像（Chrome 不在手表通知列表里），
+ * 所以手表这条另走 Bark：它有独立的 watchOS App，通知由它自己下发。
+ * key 只存本机 localStorage，不进云同步。 */
+window._sendBarkPush = function(title, body) {
+    try {
+        if (localStorage.getItem('barkEnabled') !== '1') return;
+        var key = String(localStorage.getItem('barkKey') || '').trim();
+        if (!key) return;
+        if (!document.hidden) return;          // 前台不推，避免和站内提示重复
+        var t = String(title || '传讯');
+        var b = String(body || '对方发来了消息');
+        if (b.length > 200) b = b.slice(0, 200) + '…';
+        var url = 'https://api.day.app/' + encodeURIComponent(key)
+                + '/' + encodeURIComponent(t)
+                + '/' + encodeURIComponent(b)
+                + '?group=' + encodeURIComponent('传讯')
+                + '&level=timeSensitive'
+                + '&_=' + Date.now();              // 防图片缓存导致重复内容不推送
+        window._lastBarkUrl = url;             // 便于排查
+        var img = new Image();
+        img.src = url;
+    } catch (e) {}
+};
+
+window._saveBarkKey = function(v) {
+    var key = String(v || '').trim();
+    // 容错：粘整条地址（https://api.day.app/xxx/测试）或 xxx/body 时，只留 key 那一段
+    var m = key.match(/api\.day\.app\/+([^\/?#\s]+)/i);
+    if (m) key = m[1];
+    key = key.replace(/[\/?#].*$/, '').trim();
+    if (key) {
+        localStorage.setItem('barkKey', key);
+        localStorage.setItem('barkEnabled', '1');
+    } else {
+        localStorage.removeItem('barkKey');
+        localStorage.setItem('barkEnabled', '0');
+    }
+    var st = document.getElementById('bark-push-status');
+    if (st) st.textContent = key ? '已连接' : '未设置';
+};
+
+document.addEventListener('DOMContentLoaded', function() {
+    var inp = document.getElementById('bark-key-input');
+    if (inp) inp.value = localStorage.getItem('barkKey') || '';
+    var st = document.getElementById('bark-push-status');
+    if (st) st.textContent = (localStorage.getItem('barkKey') || '') ? '已连接' : '未设置';
+});
+
 window._sendPartnerNotification = function(title, body) {
     try {
+        if (typeof window._sendBarkPush === 'function') window._sendBarkPush(title, body);
         if (localStorage.getItem('notifEnabled') !== '1') return;
         if (!('Notification' in window)) return;
         if (Notification.permission !== 'granted') return;

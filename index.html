@@ -2190,6 +2190,16 @@ html[data-theme="dark"] #cs-transition-overlay{background:radial-gradient(circle
                             <div class="keepalive-wave-bar" style="animation-delay:0.05s;"></div>
                             <span style="font-size:11px;color:var(--accent-color);margin-left:6px;font-weight:600;">LIVE</span>
                         </div>
+                        <div class="setting-pill-row" id="bark-push-row" style="border-top:1px solid var(--border-color);display:flex;flex-direction:column;align-items:stretch;gap:8px;">
+                            <div style="display:flex;align-items:center;gap:10px;">
+                                <span class="setting-pill-icon"><i class="fas fa-clock"></i></span>
+                                <span class="setting-pill-label" style="flex:1;">手表推送 <span id="bark-push-status" style="font-size:11px;color:var(--text-secondary);font-weight:400;">未设置</span></span>
+                            </div>
+                            <input id="bark-key-input" type="text" inputmode="latin" autocomplete="off" spellcheck="false"
+                                   placeholder="粘贴 Bark 的 key，手表就能收到"
+                                   oninput="window._saveBarkKey && window._saveBarkKey(this.value)"
+                                   style="width:100%;box-sizing:border-box;padding:9px 12px;border-radius:10px;border:1px solid var(--border-color);background:var(--primary-bg);color:var(--text-primary);font-size:13px;outline:none;">
+                        </div>
                     </div>
                 </div>
 
@@ -3705,7 +3715,7 @@ html[data-theme="dark"] #cs-transition-overlay{background:radial-gradient(circle
     <!-- == 合并模块 == -->
     <script src="js/games.js?v=20261110c"></script> 
     <script src="js/features.js?v=20261117g"></script> 
-    <script src="js/data.js"></script>
+    <script src="js/data.js?v=20261119a"></script>
     <script src="js/onboarding.js"></script> 
     <script src="js/features/anniversary.js"></script>
     <script src="js/features/period.js"></script>
